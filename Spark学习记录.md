@@ -1,3 +1,9 @@
+# 记录
+
+## 公司这个同学对spark 的学习资料总结的不错
+
+https://cf.jd.com/display/~songqingluan/spark
+
 # 一些异常
 
 spark local SecurityManager: authentication disabled; ui acls disabled; users with view permissions: Set(allen); groups with view permissions: Set(); users with modify permissions: Set(allen); groups with modify permissions: Set() Exception in thread "main" java.lang.NoSuchMethodError: io.netty.buffer.PooledByteBufAllocator.defaultNumHeapArena()
