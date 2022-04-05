@@ -1,8 +1,4 @@
-# 记录
-
-## 公司这个同学对 spark 的学习资料总结的不错
-
-https://cf.jd.com/display/~songqingluan/spark
+# 
 
 # 一些异常
 
@@ -125,6 +121,130 @@ https://spark.apache.org/docs/1.6.3/streaming-programming-guide.html
 -  When running a Spark Streaming program locally, do not use “local” or “local[1]” as the master URL. Either of these means that only one thread will be used for running tasks locally. If you are using a input DStream based on a receiver (e.g. sockets, Kafka, Flume, etc.), then the single thread will be used to run the receiver, leaving no thread for processing the received data. Hence, when running locally, always use “local[*n*]” as the master URL, where *n* > number of receivers to run (see [Spark Properties](https://spark.apache.org/docs/1.6.3/configuration.html#spark-properties) for information on how to set the master).
 - Extending the logic to running on a cluster, the number of cores allocated to the Spark Streaming application must be more than the number of receivers. Otherwise the system will receive data, but not be able to process it.
 
+# Spark 学习笔记
+
+## 公司这个同学对 spark 的学习资料总结的不错
+
+https://cf.jd.com/display/~songqingluan/spark
+
+## 印象笔记重点复习
+
+### spark 执行流程
+
+![image-20220405163732898](Spark学习记录.assets/image-20220405163732898.png)
+
+![image-20220405163749407](Spark学习记录.assets/image-20220405163749407.png)
+
+重点关注 taskSchedule 和 DagSchedule 作用；
+
+### yarn 两种提交模式
+
+![image-20220405164655715](Spark学习记录.assets/image-20220405164655715.png)
+
+### sparkContext 原理
+
+![image-20220405164911021](Spark学习记录.assets/image-20220405164911021.png)
+
+### DagSchedule 原理剖析
+
+![image-20220405165438524](Spark学习记录.assets/image-20220405165438524.png)
+
+### 普通Shuffle操作的原理剖析
+
+注意：每个shuffle 的过程其实涉及到了三个不同的 rdd：1. ShuffledMapTask 接收到的 MapPartitionsRDD，2. ResultTask 拉取数据构造的 ShuffledRDD，3. ResultTask 对数据聚合生成的 MapPartitionsRDD
+
+### P77 055_2优化后的Shuffle操作的原理剖析
+
+这篇文章解释得比较清晰；
+
+https://blog.csdn.net/lpp_dd/article/details/87968703   
+
+>考虑到多个临时文件导致磁盘IO请求过多，产生效率问题。Hash Shuffle进行了优化。之前每个Executor中并行着多个Task任务，临时文件个数为M*R， **现在考虑将每个Executor上执行的多个Task的结果写入到一个文件中，这样临时文件的个数为ER**，这个数量级比之前比小了并发Task数量倍数。但是如果Executor节点过多，效率还是不高。
+
+### P79 056_BlockManager原理剖析(1)
+
+![image-20220405171222262](Spark学习记录.assets/image-20220405171222262.png)
+
+### P81 057_CacheManager原理剖析(1)
+
+![image-20220405171935239](Spark学习记录.assets/image-20220405171935239.png)
+
+### P83 058_Spark Checkpoint 原理剖析
+
+**核心：容错**
+
+持久化过的数据也可能丢失，通过 checkoutpoint 设置一个容错的文件系统报错需要持久化的文件。
+
+容错文件系统中保存的是 加了 checkoutpoint 的rdd；
+
+![image-20220405172132334](Spark学习记录.assets/image-20220405172132334.png)
+
+![image-20220405172502700](Spark学习记录.assets/image-20220405172502700.png)
+
+![image-20220405173107761](Spark学习记录.assets/image-20220405173107761.png)
+
+![image-20220405173215842](Spark学习记录.assets/image-20220405173215842.png)
+
+### P84 Spark 性能优化
+
+![image-20220405173556845](Spark学习记录.assets/image-20220405173556845.png)
+
+#### 内存优化
+
+![image-20220405174007094](Spark学习记录.assets/image-20220405174007094.png)
+
+![image-20220405174033165](Spark学习记录.assets/image-20220405174033165.png)
+
+#### 使用高性能序列化类库
+
+默认使得是 java原生的序列化机制，ObjectInputStream， ObjectOutputStream
+
+![image-20220405174156536](Spark学习记录.assets/image-20220405174156536.png)
+
+![image-20220405174319683](Spark学习记录.assets/image-20220405174319683.png)
+
+Kryo 的使用：
+
+![image-20220405174520632](Spark学习记录.assets/image-20220405174520632.png)
+
+![image-20220405174922120](Spark学习记录.assets/image-20220405174922120.png)
+
+#### 优化数据结构
+
+![image-20220405175047031](Spark学习记录.assets/image-20220405175047031.png)
+
+![image-20220405175059983](Spark学习记录.assets/image-20220405175059983.png)
+
+![image-20220405175143435](Spark学习记录.assets/image-20220405175143435.png)
+
+![image-20220405175235324](Spark学习记录.assets/image-20220405175235324.png)
+
+#### 持久化、checkoutpoint rdd
+
+#### 使用序列化的持久化级别
+
+![image-20220405175405250](Spark学习记录.assets/image-20220405175405250.png)
+
+#### gc 优化
+
+![image-20220405175611531](Spark学习记录.assets/image-20220405175611531.png)
+
+#### 合理设置并行度
+
+#### 广播共享数据、累加器
+
+#### 数据聚合
+
+#### shuffle 优化
+
+这篇文章解释得比较清晰；
+
+https://blog.csdn.net/lpp_dd/article/details/87968703   
+
+
+
+
+
 # [Spark DataFrame Repartition and Parquet Partition](https://stackoverflow.com/questions/52521067/spark-dataframe-repartition-and-parquet-partition)
 
 >Couple of things here that you;re asking - Partitioning, Bucketing and Balancing of data,
@@ -163,7 +283,7 @@ https://spark.apache.org/docs/1.6.3/streaming-programming-guide.html
 
 
 
-# 开窗函数？
+# 开窗函数
 
 ![image-20200916221648095](./spark_img/image-20200916221648095.png)
 
@@ -401,7 +521,7 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 ## [离线轻量级大数据平台Spark之JavaRDD关联join操作](https://blog.csdn.net/fjssharpsword/article/details/54379506)
 
 ```java
- //合并两个JavaPairRDD，得到训练集和预测集
+ 			//合并两个JavaPairRDD，得到训练集和预测集
 	    JavaPairRDD<String, Tuple2<String, String>> tLines=pdLines.join(ptLines);//训练街
 	    Tuple2<String, Tuple2<String, String>>  tpfirst=tLines.first();
 	    System.out.println(tpfirst._1+"|"+tpfirst._2()._1+"|"+tpfirst._2()._2);
@@ -484,11 +604,9 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 >
 >基于direct stream的方法采用Kafka的简单消费者API，它的流程大大简化了。executor不再从Kafka中连续读取消息，也消除了receiver和WAL。还有一个改进就是Kafka分区与RDD分区是一一对应的，更可控。
 >**driver进程只需要每次从Kafka获得批次消息的offset range，然后executor进程根据offset range去读取该批次对应的消息即可。由于offset在Kafka中能唯一确定一条消息，且在外部只能被Streaming程序本身感知到，因此消除了不一致性，达到了exactly once。**
-> 不过，由于它采用了简单消费者API，我们就需要自己来管理offset。否则一旦程序崩溃，整个流只能从earliest或者latest点恢复，这肯定是不稳妥的。offset管理在之前的文章中提到过，这里不再赘述。
+> 不过，由于它采用了简单消费者API，**我们就需要自己来管理offset。**否则一旦程序崩溃，整个流只能从earliest或者latest点恢复，这肯定是不稳妥的。offset管理在之前的文章中提到过，这里不再赘述。
 >
->
->
->最后，我们还需要保证输出过程也符合exactly once语义。Spark Streaming的输出一般是靠foreachRDD()算子来实现，它默认是at least once的。如果输出过程中途出错，那么就会重复执行直到写入成功。为了让它符合exactly once，可以施加两种限制之一：**幂等性写入**（idempotent write）、**事务性写入**（transactional write）。（如何做事务性写入，不懂？？？）
+>最后，我们还需要保证输出过程也符合exactly once语义。Spark Streaming的输出一般是靠foreachRDD()算子来实现，它默认是at least once的。如果输出过程中途出错，那么就会重复执行直到写入成功。为了让它符合exactly once，可以施加两种限制之一：**幂等性写入**（idempotent write）、**事务性写入**（transactional write）。
 
 
 
@@ -498,8 +616,6 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 
 >当调用` rdd.iterator() `去计算该 rdd 的 partition 的时候，会调用 `computeOrReadCheckpoint(split: Partition) `去查看该 rdd 是否被 checkpoint 过了，如果是，就调用该 rdd 的 parent rdd 的 iterator() 也就是 CheckpointRDD.iterator()，否则直接调用该RDD的`compute`, 那么我们就跟进`CheckpointRDD`的`compute`
 
-
-
 [使用spark.streaming.kafka.consumer.poll.ms和reconnect.backoff.ms解决spark streaming消费kafka时任务不稳定的问题](https://blog.csdn.net/weixin_36585549/article/details/107062219)
 
 ># 参数分析
@@ -507,7 +623,7 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 >## spark.streaming.kafka.consumer.poll.ms
 >
 >这个参数我看了下[这篇文章](https://www.stratio.com/blog/optimizing-spark-streaming-applications-apache-kafka/)，按我的理解大致如下：
->spark 去 kafka取数的时候，会有一个超时时间。如果两次尝试后都出现了超时，这个任务就会失败，然后spark会把这个任务分发到其它的executor上面去执行，这就会导致一定的调度耗时。
+>spark 去 kafka 取数的时候，会有一个超时时间。如果两次尝试后都出现了超时，这个任务就会失败，然后spark会把这个任务分发到其它的executor上面去执行，这就会导致一定的调度耗时。
 >在spark中这个参数的默认值是512ms。如果超时时间很短，但是kafka响应的时间很长，这就会导致spark中有很多的任务失败。如果超时时间太长，spark在这段时间内什么都不做且最终还是会超时，就会产生很大的延迟（poll timeout+executor中的任务调度）。
 >如果spark作业中有很多的任务失败，你需要去增大这个值（或者你该去kafka那边看看为啥它那么久都没响应）。
 >
@@ -528,7 +644,6 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 >spark中，最基本的原则，就是每个task处理一个RDD的partition。
 >
 >1、MapPartitions操作的优点：
->
 >
 >如果是普通的map，比如一个partition中有1万条数据；ok，那么你的function要执行和计算1万次。
 >但是，使用MapPartitions操作之后，一个task仅仅会执行一次function，function一次接收所有的partition数据。只要执行一次就可以了，性能比较高。
@@ -699,7 +814,7 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 >
 >1.Receiver方式生成的微批RDD即BlockRDD，分区数就是block数
 >
->2.Direct方式生成的微批RDD即kafkaRDD，分区数和kafka分区数一一对应
+>2.Direct方式生成的微批RDD即kafkaRDD，**分区数和kafka分区数一一对应**
 
 ## [Spark学习-Coalesce()方法和rePartition()方法](https://blog.csdn.net/lzq20115395/article/details/80602071)
 
@@ -719,7 +834,7 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 
 ## [Spark-Streaming反压（back-pressure）](https://zhuanlan.zhihu.com/p/45954932)
 
-## [Spark Streaming + Kafka的offset管理](https://blog.csdn.net/qq_38976805/article/details/96210028) (不理解自定义 offset的方式)
+## [Spark Streaming + Kafka的offset管理](https://blog.csdn.net/qq_38976805/article/details/96210028) 
 
 >offset的三种管理方式
 >**自动提交offset（彻底放弃使用这种方式吧）**：enable.auto.commit=true。一但consumer挂掉，就会导致数据丢失或重复消费。offset不可控。
@@ -798,7 +913,7 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 >
 >Offse重置策略一共有三种："latest", "earliest", "none"
 >
->"latest", "earliest"不影响程序的正常运行，会打印相关的offset越界日志
+>**"latest", "earliest"不影响程序的正常运行，会打印相关的offset越界日志**
 >
 >"none"会直接抛出OffsetOutOfRangeException异常
 
