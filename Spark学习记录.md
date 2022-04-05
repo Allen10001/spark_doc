@@ -1,6 +1,6 @@
 # 记录
 
-## 公司这个同学对spark 的学习资料总结的不错
+## 公司这个同学对 spark 的学习资料总结的不错
 
 https://cf.jd.com/display/~songqingluan/spark
 
