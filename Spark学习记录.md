@@ -123,6 +123,63 @@ https://spark.apache.org/docs/1.6.3/streaming-programming-guide.html
 
 # Spark 学习笔记
 
+## Spark的动态资源分配
+
+https://zhuanlan.zhihu.com/p/339381556
+
+>
+>
+>
+
+##  RDD和DataFrame和DataSet三者间的区别
+
+https://blog.csdn.net/weixin_43087634/article/details/84398036
+
+>在SparkSQL中Spark为我们提供了两个新的抽象，分别是DataFrame和DataSet。他们和RDD有什么区别呢？首先从版本的产生上来看：
+>**RDD (Spark1.0) —> Dataframe(Spark1.3) —> Dataset(Spark1.6)**
+>
+>如果同样的数据都给到这三个数据结构，他们分别计算之后，都会给出相同的结果。不同是的他们的执行效率和执行方式。
+>
+>在后期的Spark版本中，DataSet会逐步取代RDD和DataFrame成为唯一的API接口。
+>
+>RDD
+>
+>RDD是一个懒执行的不可变的可以支持Lambda表达式的并行数据集合。
+>RDD的最大好处就是简单，API的人性化程度很高。
+>RDD的劣势是性能限制，它是一个JVM驻内存对象，这也就决定了存在GC的限制和数据增加时Java序列化成本的升高。
+>Dataframe
+>
+>与RDD类似，DataFrame也是一个分布式数据容器。然而DataFrame更像传统数据库的二维表格，除了数据以外，还记录数据的结构信息，即schema。同时，与Hive类似，DataFrame也支持嵌套数据类型（struct、array和map）。从API易用性的角度上看，DataFrame API提供的是一套高层的关系操作，比函数式的RDD API要更加友好，门槛更低。由于与R和Pandas的DataFrame类似，Spark DataFrame很好地继承了传统单机数据分析的开发体验。
+>![image-20220415163223462](Spark学习记录.assets/image-20220415163223462.png)
+>
+> 上图直观地体现了DataFrame和RDD的区别。左侧的RDD[Person]虽然以Person为类型参数，但Spark框架本身不了解Person类的内部结构。而右侧的DataFrame却提供了详细的结构信息，使得Spark SQL可以清楚地知道该数据集中包含哪些列，每列的名称和类型各是什么。DataFrame多了数据的结构信息，即schema。**RDD是分布式的Java对象的集合。DataFrame是分布式的Row对象的集合。**DataFrame除了提供了比RDD更丰富的算子以外，更重要的特点是提升执行效率、减少数据读取以及执行计划的优化，比如filter下推、裁剪等。
+>
+>**DataFrame是为数据提供了Schema的视图。可以把它当做数据库中的一张表来对待**
+>
+>**DataFrame也是懒执行的。**
+>
+>**性能上比RDD要高，主要有两方面原因：** 
+>
+>**定制化内存管理**
+>数据以二进制的方式存在于非堆内存，节省了大量空间之外，还摆脱了GC的限制。
+>![image-20220415163756824](Spark学习记录.assets/image-20220415163756824.png)
+>
+>**优化的执行计划**
+>查询计划通过Spark catalyst optimiser进行优化.
+>
+>![image-20220415163816929](Spark学习记录.assets/image-20220415163816929.png)
+>
+>Dataset
+>
+>是Dataframe API的一个扩展，是Spark最新的数据抽象。
+>用户友好的API风格，既具有类型安全检查也具有Dataframe的查询优化特性。
+>Dataset支持编解码器，当需要访问非堆上的数据时可以避免反序列化整个对象，提高了效率。
+>样例类被用来在Dataset中定义数据的结构信息，样例类中每个属性的名称直接映射到DataSet中的字段名称。
+>**Dataframe是Dataset的特列，DataFrame=Dataset[Row] ，所以可以通过as方法将Dataframe转换为Dataset。Row是一个类型，跟Car、Person这些的类型一样，所有的表结构信息我都用Row来表示。**
+>**DataSet是强类型的。**比如可以有Dataset[Car]，Dataset[Person].
+>DataFrame只是知道字段，但是不知道字段的类型，所以在执行这些操作的时候是没办法在编译的时候检查是否类型失败的，比如你可以对一个String进行减法操作，在执行的时候才报错，而DataSet不仅仅知道字段，而且知道字段类型，所以有更严格的错误检查。就跟JSON对象和类对象之间的类比。
+>
+
 ## 公司这个同学对 spark 的学习资料总结的不错
 
 https://cf.jd.com/display/~songqingluan/spark
