@@ -149,10 +149,10 @@ https://blog.csdn.net/weixin_43087634/article/details/84398036
 >RDD的劣势是性能限制，它是一个JVM驻内存对象，这也就决定了存在GC的限制和数据增加时Java序列化成本的升高。
 >Dataframe
 >
->与RDD类似，DataFrame也是一个分布式数据容器。然而DataFrame更像传统数据库的二维表格，除了数据以外，还记录数据的结构信息，即schema。同时，与Hive类似，DataFrame也支持嵌套数据类型（struct、array和map）。从API易用性的角度上看，DataFrame API提供的是一套高层的关系操作，比函数式的RDD API要更加友好，门槛更低。由于与R和Pandas的DataFrame类似，Spark DataFrame很好地继承了传统单机数据分析的开发体验。
+>与RDD类似，DataFrame也是一个分布式数据容器。然而**DataFrame更像传统数据库的二维表格，除了数据以外，还记录数据的结构信息，即schema**。同时，与Hive类似，DataFrame也支持嵌套数据类型（struct、array和map）。从API易用性的角度上看，DataFrame API提供的是一套高层的关系操作，比函数式的RDD API要更加友好，门槛更低。由于与R和Pandas的DataFrame类似，Spark DataFrame很好地继承了传统单机数据分析的开发体验。
 >![image-20220415163223462](Spark学习记录.assets/image-20220415163223462.png)
 >
-> 上图直观地体现了DataFrame和RDD的区别。左侧的RDD[Person]虽然以Person为类型参数，但Spark框架本身不了解Person类的内部结构。而右侧的DataFrame却提供了详细的结构信息，使得Spark SQL可以清楚地知道该数据集中包含哪些列，每列的名称和类型各是什么。DataFrame多了数据的结构信息，即schema。**RDD是分布式的Java对象的集合。DataFrame是分布式的Row对象的集合。**DataFrame除了提供了比RDD更丰富的算子以外，更重要的特点是提升执行效率、减少数据读取以及执行计划的优化，比如filter下推、裁剪等。
+> 上图直观地体现了DataFrame和RDD的区别。左侧的RDD[Person]虽然以Person为类型参数，但Spark框架本身不了解Person类的内部结构。而右侧的DataFrame却**提供了详细的结构信息**，使得Spark SQL可以清楚地知道该数据集中包含哪些列，每列的名称和类型各是什么。DataFrame 多了数据的结构信息，即schema。**RDD是分布式的Java对象的集合。DataFrame是分布式的Row对象的集合。**DataFrame除了提供了比RDD更丰富的算子以外，更重要的特点是提升执行效率、减少数据读取以及执行计划的优化，比如filter下推、裁剪等。
 >
 >**DataFrame是为数据提供了Schema的视图。可以把它当做数据库中的一张表来对待**
 >
@@ -171,13 +171,13 @@ https://blog.csdn.net/weixin_43087634/article/details/84398036
 >
 >Dataset
 >
->是Dataframe API的一个扩展，是Spark最新的数据抽象。
+>**是Dataframe API的一个扩展，是Spark最新的数据抽象。**
 >用户友好的API风格，既具有类型安全检查也具有Dataframe的查询优化特性。
->Dataset支持编解码器，当需要访问非堆上的数据时可以避免反序列化整个对象，提高了效率。
+>Dataset 支持编解码器，当需要访问非堆上的数据时可以避免反序列化整个对象，提高了效率。
 >样例类被用来在Dataset中定义数据的结构信息，样例类中每个属性的名称直接映射到DataSet中的字段名称。
 >**Dataframe是Dataset的特列，DataFrame=Dataset[Row] ，所以可以通过as方法将Dataframe转换为Dataset。Row是一个类型，跟Car、Person这些的类型一样，所有的表结构信息我都用Row来表示。**
->**DataSet是强类型的。**比如可以有Dataset[Car]，Dataset[Person].
->DataFrame只是知道字段，但是不知道字段的类型，所以在执行这些操作的时候是没办法在编译的时候检查是否类型失败的，比如你可以对一个String进行减法操作，在执行的时候才报错，而DataSet不仅仅知道字段，而且知道字段类型，所以有更严格的错误检查。就跟JSON对象和类对象之间的类比。
+>**DataSet是强类型的。**比如可以有 Dataset[Car]，Dataset[Person].
+>**DataFrame 只是知道字段，但是不知道字段的类型，所以在执行这些操作的时候是没办法在编译的时候检查是否类型失败的，比如你可以对一个String进行减法操作，在执行的时候才报错，而DataSet不仅仅知道字段，而且知道字段类型，所以有更严格的错误检查。就跟JSON对象和类对象之间的类比。**
 >
 
 ## 公司这个同学对 spark 的学习资料总结的不错
@@ -487,9 +487,49 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 
 # RDD、DataFrame和 DataSet
 
-## [谈谈RDD、DataFrame、Dataset的区别和各自的优势](https://www.cnblogs.com/starwater/p/6841807.html)
+## [谈谈 RDD、DataFrame、Dataset 的区别和各自的优势](https://www.cnblogs.com/starwater/p/6841807.html)
 
-
+>**RDD不支持sparksql操作;**
+>
+>## DataFrame:
+>
+>1、与RDD和Dataset不同，DataFrame每一行的类型固定为Row，只有通过解析才能获取各个字段的值，如
+>
+>```java
+>testDF.foreach{
+>  line =>
+>    val col1=line.getAs[String]("col1")
+>    val col2=line.getAs[String]("col2")
+>}
+>```
+>
+>## Dataset:
+>
+>这里主要对比Dataset和DataFrame，因为Dataset和DataFrame拥有完全相同的成员函数，区别只是每一行的数据类型不同
+>
+>DataFrame也可以叫Dataset[Row],每一行的类型是Row，不解析，每一行究竟有哪些字段，各个字段又是什么类型都无从得知，只能用上面提到的getAS方法或者共性中的第七条提到的模式匹配拿出特定字段
+>
+>而Dataset中，每一行是什么类型是不一定的，在自定义了case class之后可以很自由的获得每一行的信息
+>
+>```java
+>case class Coltest(col1:String,col2:Int)extends Serializable //定义字段名和类型
+>/**
+>      rdd
+>      ("a", 1)
+>      ("b", 1)
+>      ("a", 1)
+>      * */
+>val test: Dataset[Coltest]=rdd.map{line=>
+>      Coltest(line._1,line._2)
+>    }.toDS
+>test.map{
+>      line=>
+>        println(line.col1)
+>        println(line.col2)
+>    }
+>```
+>
+>可以看出，**Dataset 在需要访问列中的某个字段时是非常方便的，然而，如果要写一些适配性很强的函数时，如果使用 Dataset，行的类型又不确定，可能是各种case class，无法实现适配，这时候用DataFrame即Dataset[Row]就能比较好的解决问题.**
 
 ## [Spark结构化API—DataFrame，SQL和Dataset](https://blog.csdn.net/qq_33588730/article/details/104825757)
 
@@ -696,6 +736,40 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 
 # 文章
 
+## [Spark调优 | 不可避免的 Join 优化](https://jishuin.proginn.com/p/763bfbd5a8ff)
+
+>不难发现，要将来自buildIter的记录放到hash表中，那么每个分区来自buildIter的记录不能太大，否则就存不下，默认情况下hash join的实现是关闭状态，如果要使用hash join，必须满足以下四个条件：
+>
+>- buildIter总体估计大小超过spark.sql.autoBroadcastJoinThreshold设定的值，即不满足broadcast join条件；
+>- 开启尝试使用hash join的开关，spark.sql.join.preferSortMergeJoin=false；
+>- 每个分区的平均大小不超过spark.sql.autoBroadcastJoinThreshold设定的值，即shuffle read阶段每个分区来自buildIter的记录要能放到内存中；
+>- streamIter的大小是buildIter三倍以上；
+>
+>所以说，使用hash join的条件其实是很苛刻的，在大多数实际场景中，即使能使用hash join，但是使用sort merge join也不会比hash join差很多，所以尽量不要使用hash。
+
+## [Spark离线计算优化——leftOuterJoin优化](https://blog.csdn.net/zx_blog/article/details/80599537)
+
+>两个k-v格式的RDD进行leftOuterJoin操作如果数据量较大复杂度较高的话计算可能会消耗大量时间。
+>
+>可以通过两种方式进行优化：
+>
+>1、leftOuterJoin操作前，两个RDD自身进行reduceByKey操作（保证key唯一）；
+>
+>2、两个RDD先map成结果k-v格式，再将两个RDD进行reduceByKey操作（避免使用leftOuterJoin操作），示例：
+>
+>RDD1：（a, a1）
+>
+>RDD2：（a, b1）
+>
+>结果应该为（a，a1，b1）
+>
+>优化过程：先通过map操作 RDD1（a, a1, ''） RDD2（a, '', b1），进行reduceByKey操作得value取不为''的值，即可得到（a，a1，b1）
+>
+>除了reduceByKey，其实也可以用groupByKey代替leftOuterJoin，但是groupByKey处理结果无法控制value顺序，性能也不如reduceByKey操作。
+>
+>总结：leftOuterJoin操作都需要进行方式1的优化，保证key唯一；如果leftOuterJoin操作本身消耗时间不长，直接使用leftOuterJoin即可（leftOuterJoin操作耗时  < 两次map+reduceByKey操作耗时），如果时间较长则选择方式2进行优化。
+>
+
 ## [Spark---算子调优之MapPartitions提升Map类操作性能](https://blog.csdn.net/tian_qing_lei/article/details/77940504)
 
 >spark中，最基本的原则，就是每个task处理一个RDD的partition。
@@ -720,8 +794,6 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 >————————————————
 >版权声明：本文为CSDN博主「缘定三石」的原创文章，遵循CC 4.0 BY-SA版权协议，转载请附上原文出处链接及本声明。
 >原文链接：https://blog.csdn.net/tian_qing_lei/article/details/77940504
-
-
 
 ## [Spark RDD 分区数详解](https://blog.csdn.net/jiangsanfeng1111/article/details/78191891)
 
@@ -1129,6 +1201,12 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 
 # 《Spark 权威指南》学习笔记
 
+## 书籍 《Spark权威指南》翻译（网页版）
+
+https://github.com/SnailDove/Translation_Spark-The-Definitive-Guide
+
+
+
 ## P247 spark 如何在集群上运行
 
 
@@ -1160,7 +1238,7 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 
 表现形式 以下都可能是该问题的表现形式： 
 
-• Spark阶段中只剩下少数任务未完成，这些任务运行了很长时间。
+• Spark 阶段中只剩下少数任务未完成，这些任务运行了很长时间。
 
  • 在Spark UI中可以观察到这些缓慢的任务始终在相同的数据集上发生。
 
