@@ -98,6 +98,58 @@ public Map<TopicAndPartition, Long> getTopicAndPartitionOffset(Set<String> topic
 
 # 官网
 
+## [Accumulators](https://spark.apache.org/docs/2.4.5/rdd-programming-guide.html#broadcast-variables)
+
+>For accumulator updates performed inside **actions only**, Spark guarantees that each task’s update to the accumulator will only be applied once, i.e. **restarted tasks will not update the value**. In transformations, users should be aware of that each task’s update may be applied more than once if tasks or job stages are re-executed.
+>
+>Accumulators do not change the lazy evaluation model of Spark. If they are being updated within an operation on an RDD, their value is only updated once that RDD is computed as part of an action. Consequently, accumulator updates are not guaranteed to be executed when made within a lazy transformation like `map()`. The below code fragment demonstrates this property:
+>
+>```java
+>LongAccumulator accum = jsc.sc().longAccumulator();
+>data.map(x -> { accum.add(x); return f(x); });
+>// Here, accum is still 0 because no actions have caused the `map` to be computed.
+>```
+>
+>总结累加器常出现的问题：
+>
+>- 少加：transform 算子中调用累加器，如果没有action算子，不会被执行
+>- 多加：action 调用多次，就会被计算多次
+
+## Broadcast Variables
+
+>*Warning*: When a Spark task finishes, Spark will try to merge the accumulated updates in this task to an accumulator. If it fails, Spark will ignore the failure and still mark the task successful and continue to run other tasks. Hence, a buggy accumulator will not impact a Spark job, but it may not get updated correctly although a Spark job is successful.
+>
+>For accumulator updates performed inside **actions only**, Spark guarantees that each task’s update to the accumulator will only be applied once, i.e. restarted tasks will not update the value. In transformations, users should be aware of that each task’s update may be applied more than once if tasks or job stages are re-executed.
+>
+>Accumulators do not change the lazy evaluation model of Spark. If they are being updated within an operation on an RDD, their value is only updated once that RDD is computed as part of an action. Consequently, accumulator updates are not guaranteed to be executed when made within a lazy transformation like `map()`. The below code fragment demonstrates this property:
+>
+>```java
+>LongAccumulator accum = jsc.sc().longAccumulator();
+>data.map(x -> { accum.add(x); return f(x); });
+>// Here, accum is still 0 because no actions have caused the `map` to be computed
+>```
+
+## **Advanced GC Tuning**
+
+https://spark.apache.org/docs/2.1.0/tuning.html#garbage-collection-tuning
+
+>![image-20220428182406624](Spark学习记录.assets/image-20220428182406624.png)
+>
+>- Check if there are too many garbage collections by collecting GC stats. If a full GC is invoked multiple times for before a task completes, it means that there isn’t enough memory available for executing tasks.
+>- **If there are too many minor collections but not many major GCs,** allocating more memory for Eden would help. You can set the size of the Eden to be an over-estimate of how much memory each task will need. If the size of Eden is determined to be `E`, then you can set the size of the Young generation using the option `-Xmn=4/3*E`. (The scaling up by 4/3 is to account for space used by survivor regions as well.)
+>- In the GC stats that are printed, **if the OldGen is close to being full, reduce the amount of memory used for caching by lowering `spark.memory.fraction`; it is better to cache fewer objects than to slow down task execution.** Alternatively, consider decreasing the size of the Young generation. This means lowering `-Xmn` if you’ve set it as above. If not, try changing the value of the JVM’s `NewRatio` parameter. Many JVMs default this to 2, meaning that the Old generation occupies 2/3 of the heap. It should be large enough such that this fraction exceeds `spark.memory.fraction`.
+>- **Try the G1GC garbage collector with `-XX:+UseG1GC`.** It can improve performance in some situations where garbage collection is a bottleneck. Note that with large executor heap sizes, it may be important to increase the [G1 region size](https://blogs.oracle.com/g1gc/entry/g1_gc_tuning_a_case) with `-XX:G1HeapRegionSize`
+>- As an example, if your task is reading data from HDFS, **the amount of memory used by the task can be estimated using the size of the data block read from HDFS**. Note that the size of a decompressed block is often 2 or 3 times the size of the block. So if we wish to have 3 or 4 tasks’ worth of working space, and the HDFS block size is 128 MB, we can estimate size of Eden to be `4*3*128MB`.
+>- Monitor how the frequency and time taken by garbage collection changes with the new settings.
+
+## spark sql Performance Tuning
+
+https://spark.apache.org/docs/2.4.7/sql-performance-tuning.html
+
+>- [Caching Data In Memory](https://spark.apache.org/docs/2.4.7/sql-performance-tuning.html#caching-data-in-memory)
+>- [Other Configuration Options](https://spark.apache.org/docs/2.4.7/sql-performance-tuning.html#other-configuration-options)
+>- [Broadcast Hint for SQL Queries](https://spark.apache.org/docs/2.4.7/sql-performance-tuning.html#broadcast-hint-for-sql-queries)
+
 https://spark.apache.org/docs/1.6.3/streaming-programming-guide.html
 
 >After a context is defined, you have to do the following.
@@ -121,15 +173,93 @@ https://spark.apache.org/docs/1.6.3/streaming-programming-guide.html
 -  When running a Spark Streaming program locally, do not use “local” or “local[1]” as the master URL. Either of these means that only one thread will be used for running tasks locally. If you are using a input DStream based on a receiver (e.g. sockets, Kafka, Flume, etc.), then the single thread will be used to run the receiver, leaving no thread for processing the received data. Hence, when running locally, always use “local[*n*]” as the master URL, where *n* > number of receivers to run (see [Spark Properties](https://spark.apache.org/docs/1.6.3/configuration.html#spark-properties) for information on how to set the master).
 - Extending the logic to running on a cluster, the number of cores allocated to the Spark Streaming application must be more than the number of receivers. Otherwise the system will receive data, but not be able to process it.
 
+
+
 # Spark 学习笔记
+
+## [how to broadcast the content of a RDD efficiently](https://stackoverflow.com/questions/50341510/how-to-broadcast-the-content-of-a-rdd-efficiently)
+
+>First of all - you don't need to traverse RDD to get all data. There is API for that - `collect()`.
+>
+>Second: Broadcast is not the same as distributed.
+>
+>- In broadcast - you have all the data on each node
+>- In Distributed - you have different parts of a whole on each node
+>
+>RDD is distributed by it's nature.
+>
+>Third: To get needed content you can either use [RDD API](https://spark.apache.org/docs/2.2.0/api/scala/index.html#package) or convert it to DataFrame and use SQL queries. It depends on the data you have. Anyway contents of the result will be RDD or DataFrame and it will also be distributed. So if you need data locally - you `collect()` it.
+
+## [Spark操作：Aggregate和AggregateByKey ](https://www.cnblogs.com/mstk/p/7000509.html)
+
+>Aggregate即聚合操作。
+>
+>AggregateByKey和Aggregate差不多，也是聚合，不过它是根据Key的值来聚合。
+
+## spark 调优专栏
+
+### spark 任务调优的方向和具体方法（好文章，讲得很详细）
+
+https://umbertogriffo.gitbook.io/apache-spark-best-practices-and-tuning/
+
+### 间接调优
+
+配置、运行环境
+
+### 直接调优
+
+针对某个运行程序
+
+## Spark的动态资源分配配置
+
+https://spark.apache.org/docs/2.4.5/configuration.html#dynamic-allocation
 
 ## Spark的动态资源分配
 
 https://zhuanlan.zhihu.com/p/339381556
 
+>在Spark中，是否采用动态资源分配主要靠**spark.dynamicAllocation.enabled**这个配置来决定。如果该值设置为true，则Spark任务会根据工作负载来衡量应该增加或减少executor的数量，或者当executor有空闲的时候，就会在空闲达到有一定时间之后释放掉。在CDH中，该参数默认为true，在开源版本中，该参数默认为false。与该参数配置相关的参如下：
 >
+>> **spark.dynamicAllocation.enabled**
+>> 是否开启动态资源配置，根据工作负载来衡量是否应该增加或减少executor，默认false
+>> **`spark.dynamicAllocation.minExecutors`**
+>> **动态分配最小executor个数，在启动时就申请好的，默认0**
+>> **`spark.dynamicAllocation.maxExecutors`**
+>> **动态分配最大executor个数，默认infinity**
+>> **`spark.dynamicAllocation.initialExecutors`**
+>> **动态分配初始executor个数默认值=spark.dynamicAllocation.minExecutors**
+>> **spark.dynamicAllocation.executorIdleTimeout**
+>> **当某个executor空闲超过这个设定值，就会被kill，默认60s**
+>> **spark.dynamicAllocation.cachedExecutorIdleTimeout**
+>> **当某个缓存数据的executor空闲时间超过这个设定值，就会被kill，默认infinity**
+>> **spark.dynamicAllocation.schedulerBacklogTimeout**
+>> **任务队列非空，资源不够，申请executor的时间间隔，默认1s**
+>> **spark.dynamicAllocation.sustainedSchedulerBacklogTimeout**
+>> **同schedulerBacklogTimeout，是申请了新executor之后继续申请的间隔，默认=schedulerBacklogTimeout**
+
+## [聊一聊Spark资源动态分配](https://blog.csdn.net/klordy_123/article/details/89084216)
+
+>需要关注的几点有：
 >
+>Executor超时：当Executor不执行任何任务时，会被标记为Idle状态。空闲一段时间后即被认为超时，会被kill。该空闲时间由spark.dynamicAllocation.executorIdleTimeout决定，默认值60s。对应上图中：Job1 End到Executor1 timeout之间的时间。
+>资源不足时，何时新增Executor：当有Task处于pending状态，意味着资源不足，但是此时不会立即新增Executor，会等待spark.dynamicAllocation.schedulerBacklogTimeout配置的时间（单位秒，默认1s），超过这个时间任务还是处于Pending状态，此时需要增加Executor。
+>该新增多少Executor：新增Executor的个数主要依据是当前负载情况，即running和pending任务数以及当前Executor个数决定。用maxNumExecutorsNeeded代表当前实际需要的最大Executor个数，maxNumExecutorsNeeded和当前Executor个数的差值即是潜在的新增Executor的个数。注意：之所以说潜在的个数，是因为最终新增的Executor个数还有别的因素需要考虑，后面会有分析。下面是maxNumExecutorsNeeded计算方法：
 >
+>```JAVA
+>private def maxNumExecutorsNeeded(): Int = {
+>    val numRunningOrPendingTasks = listener.totalPendingTasks + listener.totalRunningTasks
+>    math.ceil(numRunningOrPendingTasks * executorAllocationRatio /
+>              tasksPerExecutorForFullParallelism)
+>      .toInt
+>  }
+>```
+>
+>其中numRunningOrPendingTasks为running和pending状态的任务数之和。
+>executorAllocationRatio意思很显然就是Executor分配的比率。单纯论效率而言，最快的情况下就是为每个pending状态等待的任务新增一个Executor，这样就是并行度最大化。但是，实际情况下这样往往会导致资源浪费，因为很可能某个任务申请的Executor还没启动，会出现一些其它任务执行完毕处于空闲状态的Executor出现，这种情况下其实就完全没必要去新增Executor浪费资源了。这个值取值范围是[0,1]，默认是1。
+>tasksPerExecutorForFullParallelism：每个Executor的最大并发数，简单理解为：cpu核心数（spark.executor.cores）/ 每个任务占用的核心数（spark.task.cpus）。
+>————————————————
+>版权声明：本文为CSDN博主「KLordy」的原创文章，遵循CC 4.0 BY-SA版权协议，转载请附上原文出处链接及本声明。
+>原文链接：https://blog.csdn.net/klordy_123/article/details/89084216
 
 ##  RDD和DataFrame和DataSet三者间的区别
 
@@ -539,7 +669,7 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 >
 > ```Scala
 > spark.read.format("csv")
->      .option("mode", "FAILFAST")
+>   .option("mode", "FAILFAST")
 > .option("inferSchema", "true")
 > .option("path", "path/to/file(s)")
 > .schema(someSchema)
@@ -566,7 +696,7 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 > val pushdownQuery = """(SELECT DISTINCT(DEST_COUNTRY_NAME) FROM flight_info) AS flight_info"""
 > val dbDataFrame = spark.read.format("jdbc")
 > .option("url", url).option("dbtable", pushdownQuery).option("driver", driver)
->  .load()
+> .load()
 > ```
 >
 > **多个executor不能同时读取同一文件，但可以同时读取不同的文件。通常这意味着从包含多个文件的文件夹中读取时，每个文件都将被视为DataFrame的一个split，并由executor并行读取，超过并发数的文件会进入读取队列等候。**
@@ -575,13 +705,13 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 >
 > 管理文件大小对数据写入不那么重要，但对之后的读取很重要。**当写入大量的小文件时，由于管理所有的这些小文件而产生很大的元数据开销，HDFS不能很好地处理大量的小文件，而Spark特别不适合处理小文件**。文件不宜太小但也不宜太大，因为当只需要其中几行数据时，必须读取整个数据块就会效率低下。
 >
-> **DataSet**
+> **DataSet**（重要）
 >
-> dataset具有严格的JVM语言特性，仅与Scala和Java一起使用，可以定义Dataset中每一行所包含的对象，在Scala中就是一个case类对象，它实质上定义了一种模式schema，而在Java中就是Java Bean，用户经常将Dataset称为Spark中的“类型化API”，因为**Dataset****在编译时检查类型，而DataFrame****在运行时检查类型**。
+> dataset具有严格的JVM语言特性，仅与Scala和Java一起使用，可以定义Dataset中每一行所包含的对象，在Scala中就是一个case类对象，它实质上定义了一种模式schema，而在Java中就是Java Bean，用户经常将Dataset称为Spark中的“**类型化API**”，因为**Dataset**在编译时检查类型，而DataFrame**在运行时检查类型**。
 >
-> 使用DataFrame API时，不需要创建字符串或整数，Spark就可以通过操作Row对象来处理数据。**如果使用****Scala** **或Java****，则所有DataFrame****实际上都是Row****类型的Dataset**。为了有效地支持特定领域的对象，需要一个称为“编码器（Encoder）”的特殊概念，编码器将特定类型T映射为Spark的内部类型。
+> 使用DataFrame API时，不需要创建字符串或整数，Spark就可以通过操作Row对象来处理数据。**如果使用Scala 或Java，则所有DataFrame**实际上都是Row类型的Dataset。为了有效地支持特定领域的对象，需要一个称为“编码器（Encoder）”的特殊概念，**编码器将特定类型T映射为Spark的内部类型**。
 >
-> 
+> 例如**给定一个类Person具有两个字段，名称(string)和年龄(int)，编码器保证Spark在运行时生成代码以序列化Person对象为二进制结构**。**使用DataFrame或标准结构化API时，此二进制结构就是Row类型。**当要创建自定义对象时，**可以在Scala中指定一个case类，或者在Java中通过JavaBean，这样可以通过Spark操作此对象(这样的自定义对象不是Row类型)。当使用Dataset API时，会将Spark Row格式的每一行转换为指定的特定类型对象(case类或Java 类)。此转换会减慢一点点操作速度，但可以提供更大的灵活性。**
 >
 > **如果在使用Dataset时损失性能，为什么还要使用它们呢？有这几个主要原因：**
 >
@@ -595,24 +725,24 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 >
 > （1）不可变；（2）通过模式匹配可分解，来获取类属性；（3）允许基于结构的比较而不是基于引用的比较；（4）易于使用和操作。这些特点对于数据分析很有用，因为**case****类很容易解析，而最重要的特性应该是case****类的不变性，可以通过内容结构而不是引用进行比较**。
 >
-> Dataset上的transformation操作与DataFrame上的相同。除了那些转换操作之外，**Dataset****还允许指定比DataFrame****转换更复杂和强类型的转换操作，因为Dataset****可以操作底层的JVM****类型**。为了说明这个底层对象操作，可以在刚创建的Dataset上执行filter过滤操作，创建一个接受Flight为参数的简单函数，它返回一个判断出发地和目的地是否相同的Boolean，这是一个自定义的通用函数（generic function），但不属于SparkSQL UDF的范畴：
+> Dataset上的transformation操作与DataFrame上的相同。除了那些转换操作之外，**Dataset****还允许指定比DataFrame转换更复杂和强类型的转换操作，因为Dataset可以操作底层的JVM类型。为了说明这个底层对象操作，可以在刚创建的Dataset上执行filter过滤操作，创建一个接受Flight为参数的简单函数，它返回一个判断出发地和目的地是否相同的Boolean，这是一个自定义的通用函数（generic function），但不属于SparkSQL UDF的范畴：
 >
 > ```Scala
->def originIsDestination(flight_row: Flight): Boolean = {
->  return flight_row.ORIGIN_COUNTRY_NAME == flight_row.DEST_COUNTRY_NAME
+> def originIsDestination(flight_row: Flight): Boolean = {
+> return flight_row.ORIGIN_COUNTRY_NAME == flight_row.DEST_COUNTRY_NAME
 > }
->    ```
-> 
+> ```
+>
 > 通过指定filter()括号中的函数，强制Spark在Dataset中的每一行上验证此函数，这可能非常耗资源，**对于简单过滤器，应总是首选编写****SQL****表达式，这将大大降低过滤数据的开销**，同时仍允许稍后将其作为Dataset进行操作。接下来可以将上面的自定义函数传递到filter()方法中，指定每行应验证此函数是否返回true，并相应地过滤Dataset：
 >
 > ```Scala
->flights.filter(flight_row => originIsDestination(flight_row)).first()
+> flights.filter(flight_row => originIsDestination(flight_row)).first()
 > ```
-> 
+>
 > 结果是：
 >
 > ```Scala
->Flight = Flight(United States,United States,348113)
+> Flight = Flight(United States,United States,348113)
 > ```
 
 ## [离线轻量级大数据平台Spark之JavaRDD关联join操作](https://blog.csdn.net/fjssharpsword/article/details/54379506)
@@ -736,8 +866,170 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 
 # 文章
 
+## [Spark Executor内存管理](http://arganzheng.life/spark-executor-memory-management.html)  透彻
+
+>### 堆内内存 (On-heap Memory)
+>
+>![image-20220428182406624](Spark学习记录.assets/image-20220428182406624.png)
+>
+>1. 执行内存 (Execution Memory) : 主要用于存放 Shuffle、Join、Sort、Aggregation 等计算过程中的临时数据；
+>2. 存储内存 (Storage Memory) : 主要用于存储 spark 的 cache 数据，例如RDD的缓存、unroll数据；
+>3. 用户内存（User Memory）: 主要用于存储 RDD 转换操作所需要的数据，例如 RDD 依赖等信息；
+>4. 预留内存（Reserved Memory）: 系统预留内存，会用来存储Spark内部对象。
+>
+>### 堆外内存 (Off-heap Memory)
+>
+>Spark 1.6 开始引入了 Off-heap memory (详见SPARK-11389)。这种模式不在 JVM 内申请内存，而是调用 Java 的 unsafe 相关 API 进行诸如 C 语言里面的 `malloc()` 直接向操作系统申请内存。这种方式下 Spark 可以直接操作系统堆外内存，减少了不必要的内存开销，以及频繁的 GC 扫描和回收，提升了处理性能。另外，堆外内存可以被精确地申请和释放，而且序列化的数据占用的空间可以被精确计算，所以相比堆内内存来说降低了管理的难度，也降低了误差。，缺点是必须自己编写内存申请和释放的逻辑。
+>
+>默认情况下`Off-heap`模式的内存并不启用，我们可以通过 `spark.memory.offHeap.enabled` 参数开启，并由 `spark.memory.offHeap.size` 指定堆外内存的大小，单位是字节（占用的空间划归 JVM OffHeap 内存）。
+>
+>![image-20220428183909584](Spark学习记录.assets/image-20220428183909584.png)
+>
+>### Execution 内存和 Storage 内存动态占用机制
+>
+>在 Spark 1.5 之前，Execution 内存和 Storage 内存分配是静态的，换句话说就是如果 Execution 内存不足，即使 Storage 内存有很大空闲程序也是无法利用到的；反之亦然。
+>
+>静态内存管理机制实现起来较为简单，但如果用户不熟悉 Spark 的存储机制，或没有根据具体的数据规模和计算任务或做相应的配置，很容易造成”一半海水，一半火焰”的局面，即存储内存和执行内存中的一方剩余大量的空间，而另一方却早早被占满，不得不淘汰或移出旧的内容以存储新的内容。
+>
+>统一内存管理机制，与静态内存管理最大的区别在于存储内存和执行内存共享同一块空间，可以动态占用对方的空闲区域：
+>
+>![image-20220428201435251](Spark学习记录.assets/image-20220428201435251.png)
+>
+>### 任务内存管理（Task Memory Manager）
+>
+>每个 Executor 中可同时运行的任务数由 Executor 分配的 CPU 的核数 N 和每个任务需要的 CPU 核心数 C 决定。其中:
+>
+>```text
+>N = spark.executor.cores
+>C = spark.task.cpus
+>```
+>
+>由此每个 Executor 的最大任务并行度可表示为 : `TP = N / C` 。
+>
+>其中，C 值与应用类型有关，大部分应用使用默认值 1 即可，因此，影响 Executor 中最大任务并行度（最大活跃task数）的主要因素是 N。
+>
+>依据 Task 的内存使用特征，前文所述的 Executor 内存模型可以简单抽象为下图所示模型：
+>
+>![image-20220428203435750](Spark学习记录.assets/image-20220428203435750.png)
+>
+>其中，Executor 向 yarn 申请的总内存可表示为 : `M = M1 + M2` 。
+>
+>如果考虑堆外内存则大概是如下结构：
+>
+>![image-20220428203459509](Spark学习记录.assets/image-20220428203459509.png)
+>
+>### 一个示例
+>
+>现在我们提交的 Spark 作业关于内存的配置如下：`--executor-memory 18g`
+>
+>由于没有设置 `spark.memory.fraction` 和 `spark.memory.storageFraction` 参数，我们可以看到 Spark UI 关于 Storage Memory 的显示如下：
+>
+>![image-20220428204949912](Spark学习记录.assets/image-20220428204949912.png)
+>
+>#### 用了堆内和堆外内存
+>
+>现在如果我们启用了堆外内存，情况会怎样呢？我们的内存相关配置如下：
+>
+>```text
+>spark.executor.memory           18g
+>spark.memory.offHeap.enabled   true
+>spark.memory.offHeap.size       10737418240
+>```
+>
+>从上面可以看出，堆外内存为 10GB，现在 Spark UI 上面显示的 Storage Memory 可用内存为 20.9GB，如下：
+>
+>![image-20220428205111768](Spark学习记录.assets/image-20220428205111768.png)
+>
+>### Executor内存参数调优
+>
+>#### 1. Executor JVM Used Memory Heuristic
+>
+>现象：配置的executor内存比实际使用的JVM最大使用内存还要大很多。
+>
+>原因：这意味着 executor 内存申请过多了，实际上并不需要使用这么多内存。
+>
+>解决方案：将 `spark.executor.memory` 设置为一个比较小的值。
+>
+>```text
+>spark.executor.memory : 16 GB
+>Max executor peak JVM used memory : 6.6 GB
+>
+>Suggested spark.executor.memory : 7 GB 
+>```
+>
+>#### 2. Executor Unified Memory Heuristic
+>
+>现象：分配的统一内存 (`Unified Memory = Storage Memory + Execution Memory`) 比 executor 实际使用的统一内存大的多。
+>
+>原因：这意味着不需要这么大的统一内存。
+>
+>解决方案：降低 `spark.memory.fraction` 的比例。
+>
+>```text
+>spark.executor.memory : 10 GB 
+>spark.memory.fraction : 0.6
+>Allocated unified memory : 6 GB
+>Max peak JVM userd memory : 7.2 GB
+>Max peak unified memory : 1.2 GB
+>
+>Suggested spark.memory.fraction : 0.2
+>```
+>
+>#### 3. Executor OOM类错误 （错误代码 137、143等）
+>
+>该类错误一般是由于 Heap（M2）已达上限，Task 需要更多的内存，而又得不到足够的内存而导致。因此，解决方案要从增加每个 Task 的内存使用量，满足任务需求 或 降低单个 Task 的内存消耗量，从而使现有内存可以满足任务运行需求两个角度出发。因此有如下解决方案:
+>
+>法一：增加单个task的内存使用量
+>
+>法二： 降低单个Task的内存消耗量
+>
+>Executor OOM 一般发生 Shuffle 阶段，该阶段需求计算内存较大，且应用逻辑对内存需求有较大影响，下面举例就行说明：
+>
+>1、选择合适的算子，如 groupByKey 转换为 reduceByKey
+>
+>2、避免数据倾斜 (data skew)
+>
+>#### 4. Execution Memory Spill Heuristic
+>
+>现象: 在 stage 3 发现执行内存溢出。Shuffle read bytes 和 spill 分布均匀。这个 stage 有 200 个 tasks。
+>
+>原因: 执行内存溢出，意味着执行内存不足。跟上面的 OOM 错误一样，只是**执行内存不足的情况下不会报 OOM 而是会将数据溢出到磁盘。**但是整个性能很难接受。
+>
+>#### 4. Executor GC Heuristic
+>
+>现象: Executor 花费很多时间在 GC。
+>
+>原因: 可以通过 `-verbose:gc -XX:+PrintGCDetails -XX:+PrintGCTimeStamps` 查看 GC 情况
+>
+>#### 5. Beyond … memory, killed by yarn.
+>
+>出现该问题原因是由于实际使用内存上限超过申请的内存上限而被 Yarn 终止掉了, 首先说明 Yarn 中 Container 的内存监控机制：
+>
+>- Container 进程的内存使用量 : 以 Container 进程为根的进程树中所有进程的内存使用总量。
+>- Container 被杀死的判断依据 : 进程树总内存（物理内存或虚拟内存）使用量超过向 Yarn 申请的内存上限值，则认为该 Container 使用内存超量，可以被“杀死”。
+>
+>因此，对该异常的分析要从是否存在子进程两个角度出发。
+>
+>1、不存在子进程
+>
+>根据 Container 进程杀死的条件可知，在不存在子进程时，出现 killed by yarn 问题是于由 Executor(JVM) 进程自身内存超过向 Yarn 申请的内存总量 M 所致。由于未出现上一节所述的 OOM 异常，因此可判定其为 M1 (Overhead) 不足，依据 Yarn 内存使用情况有如下两种方案:
+>
+>法一、如果，M (`spark.executor.memory`) 未达到 Yarn 单个 Container 允许的上限时，可仅增加 M1（`spark.yarn.executor.memoryOverhead`），从而增加 M；如果，M 达到 Yarn 单个 Container 允许的上限时，增加 M1，降低 M2。
+>
+>注意二者之各要小于 Container 监控内存量，否则伸请资源将被 yarn 拒绝。
+>
+>法二、减少可用的 Core 的数量 N，使并行任务数减少，从而减少 Overhead 开销
+>
+>2、存在子进程
+>
+>Spark 应用中 Container 以 Executor（JVM进程）的形式存在，因此根进程为 Executor 对应的进程，而 Spark 应用向Yarn申请的总资源 `M = M1 + M2`，都是以 Executor(JVM) 进程（非进程树）可用资源的名义申请的。申请的资源并非一次性全量分配给 JVM 使用，而是**先为 JVM 分配初始值，随后内存不足时再按比率不断进行扩容，直致达到 Container 监控的最大内存使用量 M。当 Executor 中启动了子进程（如调用 shell 等）时，子进程占用的内存（记为 S）就被加入 Container 进程树，此时就会影响 Executor 实际可使用内存资源（Executor 进程实际可使用资源变为: `M - S`），然而启动 JVM 时设置的可用最大资源为 M，且 JVM 进程并不会感知 Container 中留给自己的使用量已被子进程占用，因此，当 JVM 使用量达到 `M - S`，还会继续开劈内存空间，这就会导致 Executor 进程树使用的总内存量大于 M 而被 Yarn 杀死。**
+
 ## [Spark调优 | 不可避免的 Join 优化](https://jishuin.proginn.com/p/763bfbd5a8ff)
 
+>spark提供了三种join实现：**sort merge join、broadcast hash join以及hash join。**
+>
+>
+>
 >不难发现，要将来自buildIter的记录放到hash表中，那么每个分区来自buildIter的记录不能太大，否则就存不下，默认情况下hash join的实现是关闭状态，如果要使用hash join，必须满足以下四个条件：
 >
 >- buildIter总体估计大小超过spark.sql.autoBroadcastJoinThreshold设定的值，即不满足broadcast join条件；
@@ -788,7 +1080,7 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 >3、什么时候比较适合用MapPartitions系列操作
 >
 >就是说，数据量不是特别大的时候，都可以用这种MapPartitions系列操作，性能还是非常不错的，是有提升的。比如原来是15分钟，（曾经有一次性能调优），12分钟。10分钟->9分钟。
->但是也有过出问题的经验，MapPartitions只要一用，直接OOM，内存溢出，崩溃。
+>但是也有过出问题的经验，MapPartitions 只要一用，直接OOM，内存溢出，崩溃。
 >在项目中，自己先去估算一下RDD的数据量，以及每个partition的量，还有自己分配给每个executor的内存资源。看看一下子内存容纳所有的partition数据，行不行。如果行，可以试一下，能跑通就好。性能肯定是有提升的。
 >但是试了一下以后，发现，不行，OOM了，那就放弃吧。
 >————————————————
@@ -1205,13 +1497,63 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 
 https://github.com/SnailDove/Translation_Spark-The-Definitive-Guide
 
+### Chapter19_Performance-Tuning
 
+>有许多不同的方法来优化Spark应用程序的性能，使其以更低的成本更快地运行。一般来说，您要优先考虑的主要事情是
+>
+>（1）通过分区和有效的二进制格式读取尽可能少的数据
+>
+>（2）确保在使用分区的集群上有足够的并行性和没有数据倾斜
+>
+>（3）尽可能多地使用 high-level APIs去采用已经优化过的代码，例如：结构化的API
+>
+>与任何其他软件优化工作一样，您还应该确保为您的工作优化了正确的操作：第18章中描述的 Spark 监控工具将让您了解哪些阶段花费的时间最长，并将您的精力集中在这些阶段上。一旦确定了您认为可以优化的工作，本章中的工具将为大多数用户提供最重要的性能优化机会。
+
+### Chapter 22 Event-Time and Stateful Processing
+
+>在大多数情况下，当您执行有状态操作时。Spark 为您处理所有这些复杂性。 例如，当您指定分组时，Structured Streaming 将为您维护和更新信息。您只需指定逻辑。**在执行状态操作时，Spark 将中间信息存储在状态存储中。Spark当前的状态存储实现是一个 InMemory 状态存储，通过将中间状态存储到检查点（checkpoint ）目录中，使其具有容错性。**
+>
+>
 
 ## P247 spark 如何在集群上运行
 
 
 
+## Chapter 4 Structured API Overview
 
+本质上，在结构化API中，还有另外两个API，即**“无类型 ”DataFrames 和“有类型” Datasets**。说DataFrame是未类型化的，这是不准确的。它们具有类型，但是Spark会完全维护它们，并且**仅在运行时检查那些类型是否与模式中指定的类型一致**。另一方面，**Dataset在编译时检查类型是否符合规范**。Dataset仅适用于基于Java虚拟机（JVM）的语言（Scala和Java），并且我们使用案例类或Java Bean指定类型。
+
+在大多数情况下，您可能会使用DataFrame。**对于Spark（在Scala中），DataFrames只是类型为Row的数据集。 “Row”类型是Spark内部优化表示的内部表示形式，用于计算。这种格式可以进行高度专业化和高效的计算，因为Spark 可以使用自己的内部格式运行，而不会产生任何这些代价，而不是使用JVM类型（后者可能导致高昂的垃圾收集和对象实例化成本）。**对于Spark（在Python或R中），没有诸如Dataset之类的东西：一切都是DataFrame，因此我们始终以优化格式运行。
+
+本节将演示如何在整个集群中实际执行此代码。这将帮助您了解（并可能调试）在集群上编写和执行代码的过程，因此让我们逐步执行从用户代码到执行代码的单个结构化API查询的执行。以下是步骤概述：
+
+1. Write DataFrame/Dataset/SQL Code.
+
+   **编写DataFrame / Dataset / SQL代码。**
+
+2. If valid code, Spark converts this to a Logical Plan.
+
+   如果是有效代码，**Spark会将其转换为逻辑计划。**
+
+3. Spark transforms this Logical Plan to a Physical Plan, checking for optimizations along the way.
+
+   **Spark将此逻辑计划转换为物理计划，并按照方式检查优化。**
+
+4. Spark then executes this Physical Plan (RDD manipulations) on the cluster.
+
+   然后，**Spark在集群上执行此物理计划（RDD操作）。**
+
+### Logical Planning 逻辑规划
+
+Spark使用 catalog（所有表和DataFrame信息的存储库）解析分析器中的列和表。如果所需的表或列名称在目录中不存在，则分析器可能会拒绝未解析的逻辑计划。如果分析器可以解析问题，则结果将通过Catalyst Optimizer传递，Catalyst Optimizer是一组规则的集合，这些规则试图通过向下推理谓词（predicates）或选择（selections）来优化逻辑计划。软件包可以扩展Catalyst，以包括其用于特定领域优化的规则。
+
+### Physical Planning 物理规划
+
+成功创建优化的逻辑计划后，Spark 然后开始物理计划过程。物理计划通常称为 Spark 计划，它通过生成不同的物理执行策略并通过成本模型进行比较来指定逻辑计划在集群上的执行方式，如图4-3所示。成本比较的一个示例可能是通过查看给定表的物理属性（表的大小或分区的大小）来选择如何执行给定的连接。
+
+### Execution 执行
+
+选择了物理计划后，Spark将在RDD（Spark的较底层编程接口）上运行所有这些代码（我们将在第III部分中介绍）。 Spark在运行时执行进一步的优化，生成本地Java字节码，可以在执行过程中删除整个任务或阶段。最后，结果返回给用户。
 
 ## P290 监控与调式
 
