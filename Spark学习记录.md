@@ -117,17 +117,7 @@ public Map<TopicAndPartition, Long> getTopicAndPartitionOffset(Set<String> topic
 
 ## Broadcast Variables
 
->*Warning*: When a Spark task finishes, Spark will try to merge the accumulated updates in this task to an accumulator. If it fails, Spark will ignore the failure and still mark the task successful and continue to run other tasks. Hence, a buggy accumulator will not impact a Spark job, but it may not get updated correctly although a Spark job is successful.
->
->For accumulator updates performed inside **actions only**, Spark guarantees that each task’s update to the accumulator will only be applied once, i.e. restarted tasks will not update the value. In transformations, users should be aware of that each task’s update may be applied more than once if tasks or job stages are re-executed.
->
->Accumulators do not change the lazy evaluation model of Spark. If they are being updated within an operation on an RDD, their value is only updated once that RDD is computed as part of an action. Consequently, accumulator updates are not guaranteed to be executed when made within a lazy transformation like `map()`. The below code fragment demonstrates this property:
->
->```java
->LongAccumulator accum = jsc.sc().longAccumulator();
->data.map(x -> { accum.add(x); return f(x); });
->// Here, accum is still 0 because no actions have caused the `map` to be computed
->```
+
 
 ## **Advanced GC Tuning**
 
