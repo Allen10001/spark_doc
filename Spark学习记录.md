@@ -1,5 +1,3 @@
-# 
-
 # 一些异常
 
 spark local SecurityManager: authentication disabled; ui acls disabled; users with view permissions: Set(allen); groups with view permissions: Set(); users with modify permissions: Set(allen); groups with modify permissions: Set() Exception in thread "main" java.lang.NoSuchMethodError: io.netty.buffer.PooledByteBufAllocator.defaultNumHeapArena()
@@ -272,7 +270,7 @@ https://blog.csdn.net/weixin_43087634/article/details/84398036
 >与RDD类似，DataFrame也是一个分布式数据容器。然而**DataFrame更像传统数据库的二维表格，除了数据以外，还记录数据的结构信息，即schema**。同时，与Hive类似，DataFrame也支持嵌套数据类型（struct、array和map）。从API易用性的角度上看，DataFrame API提供的是一套高层的关系操作，比函数式的RDD API要更加友好，门槛更低。由于与R和Pandas的DataFrame类似，Spark DataFrame很好地继承了传统单机数据分析的开发体验。
 >![image-20220415163223462](Spark学习记录.assets/image-20220415163223462.png)
 >
-> 上图直观地体现了DataFrame和RDD的区别。左侧的RDD[Person]虽然以Person为类型参数，但Spark框架本身不了解Person类的内部结构。而右侧的DataFrame却**提供了详细的结构信息**，使得Spark SQL可以清楚地知道该数据集中包含哪些列，每列的名称和类型各是什么。DataFrame 多了数据的结构信息，即schema。**RDD是分布式的Java对象的集合。DataFrame是分布式的Row对象的集合。**DataFrame除了提供了比RDD更丰富的算子以外，更重要的特点是提升执行效率、减少数据读取以及执行计划的优化，比如filter下推、裁剪等。
+>上图直观地体现了DataFrame和RDD的区别。左侧的RDD[Person]虽然以Person为类型参数，但Spark框架本身不了解Person类的内部结构。而右侧的DataFrame却**提供了详细的结构信息**，使得Spark SQL可以清楚地知道该数据集中包含哪些列，每列的名称和类型各是什么。DataFrame 多了数据的结构信息，即schema。**RDD是分布式的Java对象的集合。DataFrame是分布式的Row对象的集合。**DataFrame除了提供了比RDD更丰富的算子以外，更重要的特点是提升执行效率、减少数据读取以及执行计划的优化，比如filter下推、裁剪等。
 >
 >**DataFrame是为数据提供了Schema的视图。可以把它当做数据库中的一张表来对待**
 >
@@ -292,13 +290,14 @@ https://blog.csdn.net/weixin_43087634/article/details/84398036
 >Dataset
 >
 >**是Dataframe API的一个扩展，是Spark最新的数据抽象。**
->用户友好的API风格，既具有类型安全检查也具有Dataframe的查询优化特性。
->Dataset 支持编解码器，当需要访问非堆上的数据时可以避免反序列化整个对象，提高了效率。
->样例类被用来在Dataset中定义数据的结构信息，样例类中每个属性的名称直接映射到DataSet中的字段名称。
+>用户友好的API风格，既具有**类型安全检查也具有Dataframe的查询优化特性**。
+>**Dataset 支持编解码器，当需要访问非堆上的数据时可以避免反序列化整个对象，提高了效率。**
+>**样例类被用来在Dataset中定义数据的结构信息，样例类中每个属性的名称直接映射到DataSet中的字段名称。**
 >**Dataframe是Dataset的特列，DataFrame=Dataset[Row] ，所以可以通过as方法将Dataframe转换为Dataset。Row是一个类型，跟Car、Person这些的类型一样，所有的表结构信息我都用Row来表示。**
 >**DataSet是强类型的。**比如可以有 Dataset[Car]，Dataset[Person].
 >**DataFrame 只是知道字段，但是不知道字段的类型，所以在执行这些操作的时候是没办法在编译的时候检查是否类型失败的，比如你可以对一个String进行减法操作，在执行的时候才报错，而DataSet不仅仅知道字段，而且知道字段类型，所以有更严格的错误检查。就跟JSON对象和类对象之间的类比。**
 >
+>![image-20220527092405713](Spark学习记录.assets/image-20220527092405713.png)
 
 ## 公司这个同学对 spark 的学习资料总结的不错
 
@@ -482,7 +481,7 @@ Spark properties mainly can be divided into two kinds: one is related to deploy,
 
 * driver memory 和 executor memory
 
-据我的经验啊，他们两个没有必然联系。driver memory主要用来存储一些DAG图信息，任务调动，资源划分等信息，还有一些CollectAsList等算子生成的数据也会放到Dirver memory中，Executor memeory就是计算过程中生成的每个executor所占的内存。两者个内存各自用各自的没有太大关系。
+据我的经验啊，他们两个没有必然联系。**driver memory主要用来存储一些DAG图信息，任务调动，资源划分等信息，还有一些CollectAsList等算子生成的数据也会放到Dirver memory中，Executor memeory就是计算过程中生成的每个executor所占的内存。两者个内存各自用各自的没有太大关系。**
 
 - spark.akka.frameSize: 控制Spark中通信消息的最大容量 （如 task 的输出结果），默认为10M。当处理大数据时，task 的输出可能会大于这个值，需要根据实际数据设置一个更高的值。如果是这个值不够大而产生的错误，可以从 [worker的日志](https://groups.google.com/forum/?fromgroups=#!msg/spark-users/3lcmHXQhYzc/Hkger_xpSwwJ) 中进行排查。通常 worker 上的任务失败后，master 的运行日志上出现”Lost TID: “的提示，可通过查看失败的 worker 的日志文件($SPARK_HOME/worker/下面的log文件) 中记录的任务的 Serialized size of result 是否超过10M来确定。
 - spark.default.parallelism: 控制Spark中的分布式shuffle过程默认使用的task数量，默认为8个。如果不做调整，数据量大时，就容易运行时间很长，甚至是出Exception，因为8个task无法handle那么多的数据。 注意这个值也不是说设置得越大越好。
@@ -629,7 +628,7 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 >
 >DataFrame也可以叫Dataset[Row],每一行的类型是Row，不解析，每一行究竟有哪些字段，各个字段又是什么类型都无从得知，只能用上面提到的getAS方法或者共性中的第七条提到的模式匹配拿出特定字段
 >
->而Dataset中，每一行是什么类型是不一定的，在自定义了case class之后可以很自由的获得每一行的信息
+>而Dataset中，每一行是什么类型是不一定的，**在自定义了case class之后可以很自由的获得每一行的信息**
 >
 >```java
 >case class Coltest(col1:String,col2:Int)extends Serializable //定义字段名和类型
@@ -697,7 +696,7 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 >
 > **DataSet**（重要）
 >
-> dataset具有严格的JVM语言特性，仅与Scala和Java一起使用，可以定义Dataset中每一行所包含的对象，在Scala中就是一个case类对象，它实质上定义了一种模式schema，而在Java中就是Java Bean，用户经常将Dataset称为Spark中的“**类型化API**”，因为**Dataset**在编译时检查类型，而DataFrame**在运行时检查类型**。
+> dataset 具有**严格的JVM语言特性**，仅与Scala和Java一起使用，可以定义Dataset中每一行所包含的对象，在Scala中就是一个case类对象，它实质上定义了一种模式schema，而在Java中就是Java Bean，用户经常将Dataset称为Spark中的“**类型化API**”，因为**Dataset**在编译时检查类型，而DataFrame**在运行时检查类型**。
 >
 > 使用DataFrame API时，不需要创建字符串或整数，Spark就可以通过操作Row对象来处理数据。**如果使用Scala 或Java，则所有DataFrame**实际上都是Row类型的Dataset。为了有效地支持特定领域的对象，需要一个称为“编码器（Encoder）”的特殊概念，**编码器将特定类型T映射为Spark的内部类型**。
 >
@@ -788,7 +787,7 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 >
 >#### 1.为什么会有这个问题：
 >
->因为Spark Streaming 在计算的时候基于Spark Core ，而Spark Core 天生会做以下事情导致Spark Streaming 的结果（部分）重复输出；
+>因为 Spark Streaming 在计算的时候基于Spark Core ，而 Spark Core 天生会做以下事情导致Spark Streaming 的结果（部分）重复输出；
 >1.1Task重试。
 >1.2Stage重试。
 >1.3Job重试。
@@ -829,8 +828,6 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 
 [spark源码分析之Checkpoint的过程](https://developer.aliyun.com/article/74946)
 
-看不懂
-
 >当调用` rdd.iterator() `去计算该 rdd 的 partition 的时候，会调用 `computeOrReadCheckpoint(split: Partition) `去查看该 rdd 是否被 checkpoint 过了，如果是，就调用该 rdd 的 parent rdd 的 iterator() 也就是 CheckpointRDD.iterator()，否则直接调用该RDD的`compute`, 那么我们就跟进`CheckpointRDD`的`compute`
 
 [使用spark.streaming.kafka.consumer.poll.ms和reconnect.backoff.ms解决spark streaming消费kafka时任务不稳定的问题](https://blog.csdn.net/weixin_36585549/article/details/107062219)
@@ -862,10 +859,10 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 >
 >![image-20220428182406624](Spark学习记录.assets/image-20220428182406624.png)
 >
->1. 执行内存 (Execution Memory) : 主要用于存放 Shuffle、Join、Sort、Aggregation 等计算过程中的临时数据；
->2. 存储内存 (Storage Memory) : 主要用于存储 spark 的 cache 数据，例如RDD的缓存、unroll数据；
->3. 用户内存（User Memory）: 主要用于存储 RDD 转换操作所需要的数据，例如 RDD 依赖等信息；
->4. 预留内存（Reserved Memory）: 系统预留内存，会用来存储Spark内部对象。
+>1. 执行内存 (Execution Memory) : 主要用于存放 Shuffle、Join、Sort、Aggregation 等**计算过程中的临时数据；**
+>2. 存储内存 (Storage Memory) : 主要用于存储 **spark 的 cache 数据，例如RDD的缓存、unroll数据；**
+>3. 用户内存（User Memory）: 主要用于存储 **RDD 转换操作所需要的数据**，例如 RDD 依赖等信息；
+>4. 预留内存（Reserved Memory）: **系统预留内存**，会用来存储Spark内部对象。
 >
 >### 堆外内存 (Off-heap Memory)
 >
@@ -1332,26 +1329,97 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 
 ## [查看Spark进程的JVM配置及内存使用](https://blog.csdn.net/kwu_ganymede/article/details/51330277)
 
-## [浅析 Spark Shuffle 内存使用](https://www.cnblogs.com/zz-ksw/p/11565942.html)
+## [浅析 Spark Shuffle 内存使用](https://tech.youzan.com/spark_memory_1/)  shuffle 用到的 内存管理 讲得很清晰
 
+>本文将围绕以上问题梳理 **Spark 内存管理和 Shuffle 过程中与内存使用相关的知识**；然后，简要分析下在 Spark Shuffle 中有**可能导致 OOM 的原因**。
+>
 >## 一、Spark 内存管理和消费模型
 >
 >在分析 Spark Shuffle 内存使用之前。我们首先了解下以下问题：当一个 Spark 子任务 (Task) 被分配到 Executor 上运行时，Spark 管理内存以及消费内存的大体模型是什么样呢？（注：由于 OOM 主要发生在 Executor 端，所以接下来的讨论主要针对 Executor 端的内存管理和使用）。
 >
->1，在 Spark 中，使用抽象类 MemoryConsumer 来表示需要使用内存的消费者。在这个类中定义了分配，释放以及 Spill 内存数据到磁盘的一些方法或者接口。具体的消费者可以继承 MemoryConsumer 从而实现具体的行为。 因此，在 Spark Task 执行过程中，会有各种类型不同，数量不一的具体消费者。如在 Spark Shuffle 中使用的 ExternalAppendOnlyMap, ExternalSorter 等等（具体后面会分析）。
+>1，在 Spark 中，使用抽象类 **MemoryConsumer 来表示需要使用内存的消费者**。在这个类中定义了**分配，释放以及 Spill 内存数据到磁盘的一些方法或者接口**。具体的消费者可以继承 MemoryConsumer 从而实现具体的行为。 因此，**在 Spark Task 执行过程中，会有各种类型不同，数量不一的具体内存消费者**。如在 Spark Shuffle 中使用的 ExternalAppendOnlyMap, ExternalSorter 等等（具体后面会分析）。
 >
->2，MemoryConsumer 会将申请，释放相关内存的工作交由 TaskMemoryManager 来执行。当一个 Spark Task 被分配到 Executor 上运行时，会创建一个 TaskMemoryManager。在 TaskMemoryManager 执行分配内存之前，需要首先向 MemoryManager 进行申请，然后由 TaskMemoryManager 借助 MemoryAllocator 执行实际的内存分配。 
+>2，**MemoryConsumer 会将申请，释放相关内存的工作交由 TaskMemoryManager 来执行。**当一个 Spark Task 被分配到 Executor 上运行时，会创建一个 TaskMemoryManager。在 TaskMemoryManager 执行分配内存之前，需要首先向 **MemoryManager 进行申请**，然后由 TaskMemoryManager 借助 **MemoryAllocator 执行实际的内存分配。** 
 >
->3，Executor 中的 MemoryManager 会统一管理内存的使用。由于每个 TaskMemoryManager 在执行实际的内存分配之前，会首先向 MemoryManager 提出申请。因此 MemoryManager 会对当前进程使用内存的情况有着全局的了解。
+>3，**Executor 中的 MemoryManager 会统一管理内存的使用。由于每个 TaskMemoryManager 在执行实际的内存分配之前，会首先向 MemoryManager 提出申请。因此 MemoryManager 会对当前进程使用内存的情况有着全局的了解。**
 >
 >MemoryManager，TaskMemoryManager 和 MemoryConsumer 之前的对应关系，如下图。总体上，一个 MemoryManager 对应着至少一个 TaskMemoryManager （具体由 executor-core 参数指定），而一个 TaskMemoryManager 对应着多个 MemoryConsumer (具体由任务而定)。 
 >![consumerModel](https://tech.youzan.com/content/images/2018/12/memory_consumer.jpeg)
 >
 >了解了以上内存消费的整体过程以后，有两个问题需要注意下：
->1，当有多个 Task 同时在 Executor 上执行时， 将会有多个 TaskMemoryManager 共享 MemoryManager 管理的内存。那么 MemoryManager 是怎么分配的呢？答案是每个任务可以分配到的内存范围是 [1 / (2 * n), 1 / n]，其中 n 是正在运行的 Task 个数。因此，多个并发运行的 Task 会使得每个 Task 可以获得的内存变小。
+>1，当有多个 Task 同时在 Executor 上执行时， 将会有多个 TaskMemoryManager 共享 MemoryManager 管理的内存。那么 MemoryManager 是怎么分配的呢？答案是每个任务可以分配到的内存范围是 [1 / (2 * n), 1 / n]，其中 n 是正在运行的 Task 个数。因此，**多个并发运行的 Task 会使得每个 Task 可以获得的内存变小。**
 >
->2，前面提到，在 MemoryConsumer 中有 Spill 方法，当 MemoryConsumer 申请不到足够的内存时，可以 Spill 当前内存到磁盘，从而避免无节制的使用内存。但是，对于堆内内存的申请和释放实际是由 JVM 来管理的。因此，在统计堆内内存具体使用量时，考虑性能等各方面原因，Spark 目前采用的是抽样统计的方式来计算 MemoryConsumer 已经使用的内存，从而造成堆内内存的实际使用量不是特别准确。从而有可能因为不能及时 Spill 而导致 OOM。
+>2，前面提到，**在 MemoryConsumer 中有 Spill 方法，当 MemoryConsumer 申请不到足够的内存时，可以 Spill 当前内存到磁盘，从而避免无节制的使用内存。**但是，对于**堆内内存的申请和释放实际是由 JVM 来管理的。因此，在统计堆内内存具体使用量时，考虑性能等各方面原因，Spark 目前采用的是抽样统计的方式来计算 MemoryConsumer 已经使用的内存，从而造成堆内内存的实际使用量不是特别准确。从而有可能因为不能及时 Spill 而导致 OOM。**
 >
+>## 二、Spark Shuffle 过程
+>
+>整体上 Spark Shuffle 具体过程如下图，主要分为两个阶段：Shuffle Write 和 Shuffle Read。
+>
+>Write 阶段大体经历**排序（最低要求是需要按照分区进行排序），可能的聚合 (combine) 和归并（有多个文件 spill 磁盘的情况 ）**，最终**每个写 Task 会产生数据和索引两个文件。其中，数据文件会按照分区进行存储，即相同分区的数据在文件中是连续的，而索引文件记录了每个分区在文件中的起始和结束位置。**
+>
+>而对于 **Shuffle Read， 首先可能需要通过网络从各个 Write 任务节点获取给定分区的数据，即数据文件中某一段连续的区域，然后经过排序，归并等过程，最终形成计算结果。**
+>
+>对于 Shuffle Write，Spark 当前有三种实现，具体分别为 **BypassMergeSortShuffleWriter, UnsafeShuffleWriter 和 SortShuffleWriter** （具体使用哪一个实现有一个判断条件，此处不表）。而 Shuffle Read 只有一种实现。
+>
+>## 2.1 Shuffle Write 阶段分析
+>
+>### 2.1.1 BypassMergeSortShuffleWriter 分析
+>
+>对于 BypassMergeSortShuffleWriter 的实现，大体实现过程是**首先为每个分区创建一个临时分区文件，数据写入对应的分区文件，最终所有的分区文件合并成一个数据文件，并且产生一个索引文件。**由于这个过程不做排序，combine（如果需要 combine 不会使用这个实现）等操作，因此对于 BypassMergeSortShuffleWriter，总体来说是不怎么耗费内存的。
+>
+>### 2.1.2 SortShuffleWriter 分析
+>
+>SortShuffleWriter 是最一般的实现，也是日常使用最频繁的。SortShuffleWriter 主要委托 ExternalSorter 做数据插入，排序，归并 （Merge），聚合 (Combine) 以及最终写数据和索引文件的工作。ExternalSorter 实现了之前提到的 MemoryConsumer 接口。下面分析一下各个过程使用内存的情况：
+>
+>1，对于数据写入，根据是否需要做 Combine，数据会被插入到 PartitionedAppendOnlyMap 这个 Map 或者 PartitionedPairBuffer 这个数组中。每隔一段时间，当向 MemoryManager 申请不到足够的内存时，或者数据量超过 spark.shuffle.spill.numElementsForceSpillThreshold 这个阈值时 （默认是 Long 的最大值，不起作用），就会进行 Spill 内存数据到文件。假设可以源源不断的申请到内存，那么 Write 阶段的所有数据将一直保存在内存中，由此可见，PartitionedAppendOnlyMap 或者 PartitionedPairBuffer 是比较吃内存的。
+>
+>2，无论是 PartitionedAppendOnlyMap 还是 PartitionedPairBuffer， 使用的排序算法是 TimSort。在使用该算法是正常情况下使用的临时额外空间是很小，但是最坏情况下是 n / 2，其中 n 表示待排序的数组长度（具体见 TimSort 实现）。
+>
+>3，当插入数据因为申请不到足够的内存将会 Spill 数据到磁盘，在将**最终排序结果写入到数据文件**之前，需要将内存中的 PartitionedAppendOnlyMap 或者 PartitionedPairBuffer 和已经 spill 到磁盘的 SpillFiles 进行合并。Merge 的大体过程如下图。
+>
+>![image-20220530002006370](Spark学习记录.assets/image-20220530002006370.png)
+>
+>从上图可见，大体差不多就是归并排序的过程，由此可见这个过程是没有太多额外的内存消耗。归并过程中的聚合计算大体也是差不多的过程，唯一需要注意的是键值碰撞的情况，即**当前输入的各个有序队列的键值的哈希值相同，但是实际的键值不等的情况。这种情况下，需要额外的空间保存所有键值不同，但哈希值相同值的中间结果。**但是总体上来说，发生这种情况的概率并不是特别大。
+>
+>4，写数据文件的过程涉及到不同数据流之间的转化，而在流的写入过程中，一般都有缓存，主要由参数 spark.shuffle.file.buffer 和 spark.shuffle.spill.batchSize 控制，总体上这部分开销也不大。
+>
+>以上分析了 SortShuffleWriter write 阶段的主要过程，从中可以看出主要的内存消耗在写入 PartitionedAppendOnlyMap 或者 PartitionedPairBuffer 这个阶段。
+>
+>### 2.1.3 UnsafeShuffleWriter
+>
+>UnsafeShuffleWriter 是对 SortShuffleWriter 的优化，大体上也和 SortShuffleWriter 差不多，在此不再赘述。从内存使用角度看，主要差异在以下两点：
+>
+>一方面，在 **SortShuffleWriter 的 PartitionedAppendOnlyMap 或者 PartitionedPairBuffer 中，存储的是键值或者值的具体类型，也就是 Java 对象，是反序列化过后的数据。而在 UnsafeShuffleWriter 的 ShuffleExternalSorter 中数据是序列化以后存储到实际的 Page 中，而且在写入数据过程中会额外写入长度信息。**总体而言，序列化以后数据大小是远远小于序列化之前的数据。
+>
+>另一方面，**UnsafeShuffleWriter 中需要额外的存储记录（LongArray），它保存着分区信息和实际指向序列化后数据的指针（经过编码的Page num 以及 Offset）**。**相对于 SortShuffleWriter， UnsafeShuffleWriter 中这部分存储的开销是额外的。**
+>
+>## 2.2 Shuffle Read 阶段分析
+>
+>Spark Shuffle Read 主要经历从**获取数据，序列化流，添加指标统计，可能的聚合 （Aggregation) 计算以及排序等过程。**大体流程如下图。（notice: shuffle 时获取数据是 reduceTask 主动获取的）
+>
+>![image-20220530004110413](Spark学习记录.assets/image-20220530004110413.png)
+>
+>以上计算主要都是迭代进行。在以上步骤中，比较复杂的操作是从远程获取数据，聚合和排序操作。接下来，依次分析这三个步骤内存的使用情况。
+>
+>1，**数据获取分为远程获取和本地获取。**本地获取将直接从**本地的 BlockManager 取数据**， 而对于远程数据，需要走网络。在远程获取过程中，**有相关参数可以控制从远程并发获取数据的大小，正在获取数据的请求数，以及单次数据块请求是否放到内存等参数。**具体参数包括 spark.reducer.maxSizeInFlight (默认 48M)，spark.reducer.maxReqsInFlight， spark.reducer.maxBlocksInFlightPerAddress 和 spark.maxRemoteBlockSizeFetchToMem。**考虑到数据倾斜的场景，如果 Map 阶段有一个 Block 数据特别的大，默认情况由于 spark.maxRemoteBlockSizeFetchToMem 没有做限制，所以在这个阶段需要将需要获取的整个 Block 数据放到 Reduce 端的内存中，这个时候是非常的耗内存的。可以设置 spark.maxRemoteBlockSizeFetchToMem 值，如果超过该阈值，可以落盘，避免这种情况的 OOM。** 另外，在获取到数据以后，默认情况下会对获取的数据进行校验（参数 spark.shuffle.detectCorrupt 控制），这个过程也增加了一定的内存消耗。
+>
+>2，**对于需要聚合和排序的情况，这个过程是借助 ExternalAppendOnlyMap 来实现的。整个插入，Spill 以及 Merge 的过程和 Write 阶段差不多。**总体上，这块也是比较消耗内存的，但是因为有 Spill 操作，当内存不足时，可以将内存数据刷到磁盘，从而释放内存空间。
+>
+>## 三、Spark Shuffle OOM 可能性分析
+>
+>围绕内存使用，前面比较详细的分析了 Spark 内存管理以及在 Shuffle 过程可能使用较多内存的地方。接下来总结的要点如下：
+>
+>1，**首先需要注意 Executor 端的任务并发度，多个同时运行的 Task 会共享 Executor 端的内存，使得单个 Task 可使用的内存减少。**
+>
+>2，无论是在 Map 还是在 Reduce 端，**插入数据到内存，排序，归并都是比较都是比较占用内存的。因为有 Spill，理论上不会因为数据倾斜造成 OOM。 但是，由于对堆内对象的分配和释放是由 JVM 管理的，而 Spark 是通过采样获取已经使用的内存情况，有可能因为采样不准确而不能及时 Spill，导致OOM。(重要)**
+>
+>3，在 Reduce 获取数据时，由于数据倾斜，**有可能造成单个 Block 的数据非常的大，默认情况下是需要有足够的内存来保存单个 Block 的数据。因此，此时极有可能因为数据倾斜造成 OOM。 可以设置 spark.maxRemoteBlockSizeFetchToMem 参数，设置这个参数以后，超过一定的阈值，会自动将数据 Spill 到磁盘，此时便可以避免因为数据倾斜造成 OOM 的情况。**在我们的生产环境中也验证了这点，在设置这个参数到合理的阈值后，生产环境任务 OOM 的情况大大减少了。（为什么数据倾斜会导致 单个 block 的数据非常大）
+>
+>4，在 Reduce 获取数据后，**默认情况会对数据流进行解压校验（参数 spark.shuffle.detectCorrupt）。正如在代码注释中提到，由于这部分没有 Spill 到磁盘操作，也有很大的可性能会导致 OOM。**在我们的生产环境中也有碰到因为检验导致 OOM 的情况。
+>
+>## 四、小结
+>
+>**本文主要围绕内存使用这个点，对 Spark shuffle 的过程做了一个比较详细的梳理，并且分析了可能造成 OOM 的一些情况以及我们在生产环境碰到的一些问题。**本文主要基于作者对 Spark 源码的理解以及实际生产过程中遇到 OOM 案例总结而成，限于经验等各方面原因，难免有所疏漏或者有失偏颇。如有问题，欢迎联系一起讨论。
 
 ## H2 [Spark的Shuffle和MR的Shuffle异同](https://zhuanlan.zhihu.com/p/136466667)(理解不透彻)
 
@@ -1487,7 +1555,24 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 
 https://github.com/SnailDove/Translation_Spark-The-Definitive-Guide
 
-### Chapter19_Performance-Tuning
+## Chapter 11 Datasets 
+
+**Todo: Row 的源码需要看看？？？**
+
+Dataset 是结构化 API 的基本类型。我们已经使用了 DataFrames，**它们是 Row 类型的 Dataset**，可在Spark的不同语言中使用。**Dataset 是严格的 Java 虚拟机（JVM）语言特性（feature），只能使用 Scala 和 Java。使用 Dataset，您可以定义 Dataset 中每一行将组成的对象。在 Scala 中，这将是一个 case 类对象，该对象本质上定义了可以使用的模式，而在Java中，您将定义 Java Bean。**有经验的用户通常将 Dataset 称为Spark中的 “API的类型集”。有关更多信息，请参见第4章。
+
+**使用DataFrame API时，您不会创建字符串或整数，但是Spark通过操纵Row对象为您操纵数据。**实际上，如果使用Scala或Java，则所有 “DataFrame” 实际上都是Row类型的Dataset。**为了有效地支持 domain-specific objects，需要一个称为“Encoder”的特殊概念。编码器将特定于域的类型T映射到Spark的内部类型系统。**
+
+例如，**给定Person类具有 name (string) 和 age (int) 两个字段，Encoder 指示Spark在运行时生成代码以将Person对象序列化为二进制结构。当使用 DataFrame 或“标准”结构化API时，此二进制结构将为 a Row。**当我们要创建自己的 domain-specific objects 时，我们在Scala中指定一个案例类，在Java中指定一个JavaBean。**Spark将允许我们以分布式方式操纵该对象**（代替Row）。
+
+**使用 Dataset API时，该域为它遇到的每一行指定类型，Spark将Spark Row格式转换为您指定的对象（案例类或Java类）。这种转换会减慢您的操作速度，但可以提供更大的灵活性。您会注意到性能受到了影响，**但这与您在Python中的用户定义函数（UDF）之类的看到的结果数量级相差很大，因为性能成本并不像切换编程语言那样极端，但是是一件重要的事情要牢记。
+
+您可能会思考，如果我在使用 Dataset 时要付出性能损失，那为什么还要使用它们呢？如果我们必须将其简化为规范列表，则有以下两个原因：
+
+- 当您要执行的操作无法使用DataFrame操作表示时。
+- 您想要或需要类型安全性时，您愿意接受性能成本来实现它。
+
+## Chapter19_Performance-Tuning
 
 >有许多不同的方法来优化Spark应用程序的性能，使其以更低的成本更快地运行。一般来说，您要优先考虑的主要事情是
 >
@@ -1499,7 +1584,7 @@ https://github.com/SnailDove/Translation_Spark-The-Definitive-Guide
 >
 >与任何其他软件优化工作一样，您还应该确保为您的工作优化了正确的操作：第18章中描述的 Spark 监控工具将让您了解哪些阶段花费的时间最长，并将您的精力集中在这些阶段上。一旦确定了您认为可以优化的工作，本章中的工具将为大多数用户提供最重要的性能优化机会。
 
-### Chapter 22 Event-Time and Stateful Processing
+## Chapter 22 Event-Time and Stateful Processing
 
 >在大多数情况下，当您执行有状态操作时。Spark 为您处理所有这些复杂性。 例如，当您指定分组时，Structured Streaming 将为您维护和更新信息。您只需指定逻辑。**在执行状态操作时，Spark 将中间信息存储在状态存储中。Spark当前的状态存储实现是一个 InMemory 状态存储，通过将中间状态存储到检查点（checkpoint ）目录中，使其具有容错性。**
 >
