@@ -1538,8 +1538,8 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 >
 >spark.shuffle.manager
 >参数：默认是 sort。
->说明：用于设置 ShuffleManager 的类型。
->建议：**如果你的业务逻辑中需要该排序机制的话，则使用默认的SortShuffleManager就可以；而如果你的业务逻辑不需要对数据进行排序，那么建议通过bypass机制或优化的HashShuffleManager来避免排序操作，同时提供较好的磁盘读写性能。**
+>说明：该参数用于设置ShuffleManager的类型。Spark 1.5以后，有三个可选项：hash、sort和tungsten-sort。HashShuffleManager是Spark 1.2以前的默认选项，但是Spark 1.2以及之后的版本默认都是SortShuffleManager了。tungsten-sort与sort类似，但是使用了tungsten计划中的堆外内存管理机制，内存使用效率更高。
+>建议：**如果你的业务逻辑中需要该排序机制的话，则使用默认的SortShuffleManager就可以；而如果你的业务逻辑不需要对数据进行排序，那么建议通过bypass机制或优化的HashShuffleManager来避免排序操作，同时提供较好的磁盘读写性能。**这里要注意的是，tungsten-sort要慎用，因为之前发现了一些相应的bug。
 >
 >spark.shuffle.sort.bypassMergeThreshold
 >参数：默认是 200。
