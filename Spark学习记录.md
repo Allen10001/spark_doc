@@ -1331,6 +1331,8 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 
 ## [浅析 Spark Shuffle 内存使用](https://tech.youzan.com/spark_memory_1/)  shuffle 用到的 内存管理 讲得很清晰
 
+**Sort-Based Shuffle有几种不同的策略：BypassMergeSortShuffleWriter、SortShuffleWriter和UnasfeSortShuffleWriter。**本文的对 shuffle 过程内存使用的介绍都是针对 SortBasedShuffle。
+
 >本文将围绕以上问题梳理 **Spark 内存管理和 Shuffle 过程中与内存使用相关的知识**；然后，简要分析下在 Spark Shuffle 中有**可能导致 OOM 的原因**。
 >
 >## 一、Spark 内存管理和消费模型
@@ -1420,6 +1422,140 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 >## 四、小结
 >
 >**本文主要围绕内存使用这个点，对 Spark shuffle 的过程做了一个比较详细的梳理，并且分析了可能造成 OOM 的一些情况以及我们在生产环境碰到的一些问题。**本文主要基于作者对 Spark 源码的理解以及实际生产过程中遇到 OOM 案例总结而成，限于经验等各方面原因，难免有所疏漏或者有失偏颇。如有问题，欢迎联系一起讨论。
+
+## [【Spark系列】：shuffle调优](https://blog.csdn.net/hxcaifly/article/details/85530881?utm_medium=distribute.pc_relevant.none-task-blog-2~default~baidujs_title~default-0-85530881-blog-113796940.pc_relevant_paycolumn_v3&spm=1001.2101.3001.4242.1&utm_relevant_index=3)  这篇文章和上篇  shuffle 过程内存管理文章结合着看，能更容易理解 shuffle 过程
+
+># 2.HashShuffle机制
+>
+>## 2.1. HashShuffle概述
+>
+>**在spark-1.6版本之前，一直使用HashShuffle，在spark-1.6版本之后使用Sort-Base Shuffle，因为HashShuffle存在的不足所以就替换了HashShuffle。**
+>
+>## 2.2. 没有优化之前的HashShuffle机制
+>
+>![image-20220530101405658](Spark学习记录.assets/image-20220530101405658.png)
+>
+>**在HashShuffle没有优化之前，每一个ShufflleMapTask会为每一个ReduceTask创建一个bucket缓存，并且会为每一个bucket创建一个文件。这个bucket存放的数据就是经过Partitioner操作(默认是HashPartitioner)之后找到对应的bucket然后放进去，最后将数据刷新bucket缓存的数据到磁盘上，即对应的block file。**
+>
+>**然后ShuffleMapTask将输出作为MapStatus发送到DAGScheduler的MapOutputTrackerMaster，每一个MapStatus包含了每一个ResultTask要拉取的数据的位置和大小。**
+>
+>**ResultTask然后去利用BlockStoreShuffleFetcher向MapOutputTrackerMaster获取MapStatus，看哪一份数据是属于自己的，然后底层通过BlockManager将数据拉取过来。**
+>
+>拉取过来的数据会组成一个内部的ShuffleRDD，优先放入内存，内存不够用则放入磁盘，然后ResulTask开始进行聚合，最后生成我们希望获取的那个MapPartitionRDD。
+>**缺点**：
+>
+>**如上图所示：在这里有1个worker，2个executor，每一个executor运行2个ShuffleMapTask，有三个ReduceTask，所以总共就有4 * 3=12个bucket和12个block file。**  (会生成过多的小文件)
+>
+>如果数据量较大，将会生成M*R个小文件，比如ShuffleMapTask有100个，ResultTask有100个，这就会产生100*100=10000个小文件。
+>
+>bucket缓存很重要，需要将ShuffleMapTask所有数据都写入bucket，才会刷到磁盘，那么如果Map端数据过多，这就很容易造成内存溢出，尽管后面有优化，bucket写入的数据达到刷新到磁盘的阀值之后，就会将数据一点一点的刷新到磁盘，但是这样磁盘I/O就多了。
+>
+>## 2.3. 优化后的HashShuffle
+>
+>![image-20220530102123499](Spark学习记录.assets/image-20220530102123499.png)
+>
+>每一个Executor进程根据核数，决定Task的并发数量，比如executor核数是2，就是可以并发运行两个task，如果是一个则只能运行一个task。
+>
+>假设executor核数是1，ShuffleMapTask数量是M,**那么它依然会根据ResultTask的数量R，创建R个bucket缓存，然后对key进行hash，数据进入不同的bucket中，每一个bucket对应着一个block file,用于刷新bucket缓存里的数据。**
+>
+>**然后下一个task运行的时候，那么不会再创建新的bucket和block file，而是复用之前的task已经创建好的bucket和block file。即所谓同一个Executor进程里所有Task都会把相同的key放入相同的bucket缓冲区中。**
+>
+>这样的话，生成文件的数量就是(本地worker的executor数量*executor的cores*ResultTask数量)如上图所示，即2 * 1* 3 = 6个文件，每一个Executor的shuffleMapTask数量100,ReduceTask数量为100，那么未优化的HashShuffle的文件数是2 * 1 *  100 * 100 =20000，优化之后的数量是2* 1 *100 = 200文件，相当于少了100倍。
+>
+>缺点：
+>**如果 Reducer 端的并行任务或者是数据分片过多的话则 Core * Reducer Task 依旧过大，也会产生很多小文件。**
+>
+># 3.Sort-Based Shuffle
+>
+>HashShuffle回顾
+>**HashShuffle写数据的时候，内存有一个bucket缓冲区，同时在本地磁盘有对应的本地文件，如果本地有文件，那么在内存应该也有文件句柄也是需要耗费内存的。**也就是说，从内存的角度考虑，即有一部分存储数据，一部分管理文件句柄。如果Mapper分片数量为1000,Reduce分片数量为1000,那么总共就需要1000000个小文件。所以就会有很多内存消耗，频繁IO以及GC频繁或者出现内存溢出。
+>
+>而且**Reducer端读取Map端数据时，Mapper有这么多小文件，就需要打开很多网络通道读取，很容易造成Reducer（下一个stage）通过driver去拉取上一个stage数据的时候，说文件找不到，其实不是文件找不到而是程序不响应，因为正在GC。**
+>
+>## 3.2. Sorted-Based Shuffle介绍
+>
+>为了缓解Shuffle过程产生文件数过多和Writer缓存开销过大的问题，spark引入了类似于hadoop Map-Reduce的shuffle机制。该机制每一个**ShuffleMapTask**不会为每个 **reduceTask** 创建单独的文件，而是会将Task的所有结果写入同一个文件，并且对应生成一个索引文件。以前的数据是放在内存缓存中，等到数据完了再刷到磁盘，现在为了减少内存的使用，**在内存不够用的时候，可以将输出溢写到磁盘，结束的时候，再将这些不同的文件联合内存的数据一起进行归并，从而减少内存的使用量。一方面文件数量显著减少，另一方面减少Writer缓存所占用的内存大小，而且同时避免GC的风险和频率。**
+>
+>![image-20220530104651367](Spark学习记录.assets/image-20220530104651367.png)
+>
+>**Sort-Based Shuffle有几种不同的策略：BypassMergeSortShuffleWriter、SortShuffleWriter和UnasfeSortShuffleWriter。**
+>
+>对于BypassMergeSortShuffleWriter，使用这个模式特点：
+>
+>主要用于处理不需要排序和聚合的Shuffle操作，所以数据是直接写入文件，数据量较大的时候，网络I/O和内存负担较重。
+>主要适合处理Reducer任务数量比较少的情况下。
+>将每一个分区写入一个单独的文件，最后将这些文件合并,减少文件数量；但是这种方式需要并发打开多个文件，对内存消耗比较大。
+>因为BypassMergeSortShuffleWriter这种方式比SortShuffleWriter更快，所以如果在Reducer数量不大，又不需要在map端聚合和排序，而且Reducer的数目 < spark.shuffle.sort.bypassMergeThrshold指定的阀值，就是用的是这种方式。
+>
+>对于SortShuffleWriter,使用这个模式特点：
+>
+>比较适合数据量很大的场景或者集群规模很大。
+>引入了外部外部排序器，**可以支持在Map端进行本地聚合或者不聚合。**
+>如果外部排序器enable了spill功能，如果内存不够，可以先将输出溢写到本地磁盘，最后将内存结果和本地磁盘的溢写文件进行合并。
+>对于UnsafeShuffleWriter由于需要谨慎使用，我们暂不做分析。
+>
+># 4.Shuffle是如何成为Spark性能杀手及调优点思考
+>
+>Shuffle 不可以避免是因为在分布式系统中的基本点就是把一个很大的的任务/作业分成一百份或者是一千份，这一百份和一千份文件在不同的机器上独自完成各自不同的部份，我们是针对整个作业要结果，所以在后面会进行汇聚，**这个汇聚的过程的前一阶段到后一阶段以至网络传输的过程就叫 Shuffle。**在 Spark 中为了完成 Shuffle 的过程会把真正的一个作业划分为不同的 Stage，这个Stage 的划分是跟据依赖关系去决定的，Shuffle 是整个 Spark 中最消耗性能的一个地方。试试想想**如果没有 Shuffle 的话，Spark可以完成一个纯内存式的操作。**
+>
+>**Shuffle 是如何破坏了纯内存操作呢，因为在不同节点上我们要进行数据传输，数据在通过网络发送之前，要先存储在内存中，内存达到一定的程度，它会写到本地磁盘，(在以前 Spark 的版本它没有Buffer 的限制，会不断地写入 Buffer 然后等内存满了就写入本地，现在的版本对 Buffer 多少设定了限制，以防止出现 OOM，减少了 IO)。**
+>
+>Mapper 端会写入内存 Buffer，这个便关乎到 GC 的问题，然后 Mapper端的 Block 要写入本地，大量的**磁盘与IO的操作和磁盘与网络IO的操作，这就构成了分布式的性能杀手**。
+>
+>如果要对最终计算结果进行排序的话，一般会都会进行 **sortByKey，如果以最终结果来思考的话，你可以认为是产生了一个很大很大的 partition，你可以用 reduceByKey 的时候指定它的并行度，例如你把 reduceByKey 的并行度变成为1，新 RDD 的数据切片就变成1，排序一般都会在很多节点上，如果你把很多节点变成一个节点然后进行排序，有时候会取得更好的效果，因为数据就在一个节点上，技术层面来讲就只需要在一个进程里进行排序。**
+>
+>还有一个**很危险的地方就是数据倾斜，在我们谈的 Shuffle 机制中，不断强调不同机器从Mapper端抓取数据并计算结果，但有没有意会到数据可能会分布不均衡，什么时候会导致数据倾斜，答案就是 Shuffle 时会导政数据分布不均衡，也就是数据倾斜的问题。**数据倾斜的问题会引申很多其他问题，比如，网络带宽、各种硬件故障、内存过度消耗、文件掉失。因为 Shuffle 的过程中会产生大量的磁盘 IO、网络 IO、以及压缩、解压缩、序列化和反序列化等等。
+>
+># 5.shuffle调优
+>
+>大多数 Spark 作业的性能主要就是消耗在了 shuffle 环节，因为该环节包含了大量的**磁盘IO、序列化、网络数据传输等操作**。
+>
+>因此，如果要让作业的性能更上一层楼，就有必要对shuffle过程进行调优。
+>
+>注意：**影响一个Spark作业性能的因素，主要还是代码开发、资源参数以及数据倾斜，shuffle调优只能在整个Spark的性能调优中占到一小部分而已。**
+>
+>下面对spark的shuffle参数调优说明如下：
+>
+>spark.shuffle.file.buffer
+>参数：默认是 32 k。
+>说明：表示写入磁盘文件之前缓冲区的大小。
+>建议：如果资源充足，可以适当按倍数增加，比如 64 k, 从而减少 shuffle write 过程中溢写到磁盘文件的系数，减少磁盘 IO 次数，进而提升性能。1-5%
+>
+>spark.reducer.maxSizeInFlight
+>参数：默认是 48 M。
+>说明：表示 shuffle read 过程拉取数据的 buffer 大小。
+>建议：如果资源充足，可以适当按倍数增加，比如 96 M, 从而减少拉取次数，减少网络传输的次数，进而提升性能。1-5%
+>
+>spark.shuffle.io.maxRetries
+>参数：默认是 3。
+>说明：表示拉取数据的时候，执行失败重试的时间间隔。
+>建议：如果一个作业的 shuffle 过程特别耗时，可以加大该参数，比如 60 次，以避免由于 JVM 的 full gc 或者网络原因造成数据拉取失败。
+>
+>spark.shuffle.io.retryWait
+>参数：默认是 5 s。
+>说明：表示拉取数据的时候，重试的最大时长。如果超过这个次数还没有拉取成功，这个任务就会失败。
+>建议：建议加大间隔时长（比如60s），以增加shuffle操作的稳定性。
+>
+>spark.shuffle.manager
+>参数：默认是 sort。
+>说明：用于设置 ShuffleManager 的类型。
+>建议：**如果你的业务逻辑中需要该排序机制的话，则使用默认的SortShuffleManager就可以；而如果你的业务逻辑不需要对数据进行排序，那么建议通过bypass机制或优化的HashShuffleManager来避免排序操作，同时提供较好的磁盘读写性能。**
+>
+>spark.shuffle.sort.bypassMergeThreshold
+>参数：默认是 200。
+>
+>说明：当ShuffleManager为SortShuffleManager时，如果shuffle read task的数量小于这个阈值（默认是200），则shuffle write过程中不会进行排序操作，而是直接按照未经优化的HashShuffleManager的方式去写数据，但是**最后会将每个task产生的所有临时磁盘文件都合并成一个文件，并会创建单独的索引文件。**
+>
+>建议：当你使用SortShuffleManager时，如果的确不需要排序操作，那么建议将这个参数调大一些，大于shuffle read task的数量。那么此时就会自动启用bypass机制，map-side就不会进行排序了，减少了排序的性能开销。但是这种方式下，依然会产生大量的磁盘文件，因此shuffle write性能有待提高。
+>
+>spark.shuffle.consolidateFiles
+>参数：默认是 false。
+>说明：**如果使用 HashShuffleManager，该参数有效。**如果设置为true，那么就会开启 consolidate 机制，会大幅度合并 shuffle write 的输出文件，对于shuffle read task数量特别多的情况下，这种方法可以极大地减少磁盘IO开销，提升性能。
+>
+>建议：**如果的确不需要SortShuffleManager的排序机制，那么除了使用bypass机制，还可以尝试将spark.shffle.manager参数手动指定为hash，使用HashShuffleManager，同时开启consolidate机制。在实践中尝试过，发现其性能比开启了bypass机制的SortShuffleManager要高出10%~30%。**
+>
+>注意：影响一个Spark作业性能的因素，主要还有代码开发、资源参数以及数据倾斜，shuffle调优只能在整个Spark的性能调优中占到一小部分而已。
+>
 
 ## H2 [Spark的Shuffle和MR的Shuffle异同](https://zhuanlan.zhihu.com/p/136466667)(理解不透彻)
 
