@@ -92,8 +92,6 @@ public Map<TopicAndPartition, Long> getTopicAndPartitionOffset(Set<String> topic
 
 # 问题
 
-## spark yarn-cluster 模式下部署时，如何查看nm的内存占用？
-
 # 官网
 
 ## [Accumulators](https://spark.apache.org/docs/2.4.5/rdd-programming-guide.html#broadcast-variables)
@@ -114,6 +112,49 @@ public Map<TopicAndPartition, Long> getTopicAndPartitionOffset(Set<String> topic
 >- 多加：action 调用多次，就会被计算多次
 
 ## Broadcast Variables
+
+
+
+## [spark 堆内和堆外内存管理](https://zhuanlan.zhihu.com/p/517214555)
+
+>### **1.堆内内存**
+>
+>要点如下：
+>
+>- 堆内内存的大小由 `–executor-memory` 或 `spark.executor.memory` 参数配置。
+>
+>- Executor 内运行的并发任务共享 JVM 堆内内存：
+>
+>- - 这些任务在缓存 RDD 数据和广播（Broadcast）数据时占用的内存被规划为存储（Storage）内存；
+>  - 这些任务在执行 Shuffle 时占用的内存被规划为执行（Execution）内存；
+>  - 剩余的部分不做特殊规划，那些 Spark 内部的对象实例，或者用户定义的 Spark 应用程序中的对象实例，均占用剩余的空间。
+>
+>- Spark 对堆内内存的管理是一种逻辑上的”规划式”的管理，因为对象实例占用内存的申请和释放都由 JVM 完成，Spark只能在申请后和释放前记录这些内存。
+>
+>申请内存流程如下：
+>
+>- **Spark 在代码中 new 一个对象实例；**
+>- **JVM 从堆内内存分配空间，创建对象并返回对象引用；**
+>- **Spark 保存该对象的引用，记录该对象占用的内存。**
+>
+>释放内存流程如下：
+>
+>- **Spark记录该对象释放的内存，删除该对象的引用；**
+>- **等待 JVM 的垃圾回收机制释放该对象占用的堆内内存。**
+>
+>为什么会 OOM：
+>
+>- 背景：JVM 的对象可以以序列化（二进制字节流）的方式存储，本质上可以理解为将非连续空间的链式存储转化为连续空间或块存储，在访问时则需要进行序列化的逆过程——反序列化，将字节流转化为对象，序列化的方式可以节省存储空间，但增加了存储和读取时候的计算开销。
+>
+>- 原因：
+>
+>- - 序列化的对象，由于是字节流的形式，其占用的内存大小可直接计算；
+>  - **非序列化的对象，其占用的内存是通过周期性地采样近似估算而得，这种方法降低了时间开销但是有可能误差较大，导致某一时刻的实际内存有可能远远超出预期；**
+>  - 此外，**在被 Spark 标记为释放的对象实例，很有可能在实际上并没有被 JVM 回收，导致实际可用的内存小于 Spark 记录的可用内存。**
+>  - 结果：**所以 Spark 并不能准确记录实际可用的堆内内存，从而也就无法完全避免内存溢出（OOM, Out of Memory）的异常。**
+>  - 虽然不能精准控制堆内内存的申请和释放，但 Spark 通过对存储内存和执行内存各自独立的规划管理，可以决定是否要在存储内存里缓存新的 RDD，以及是否为新的任务分配执行内存，在一定程度上可以提升内存的利用率，减少异常的出现。
+>
+>
 
 
 
@@ -249,9 +290,82 @@ https://zhuanlan.zhihu.com/p/339381556
 >版权声明：本文为CSDN博主「KLordy」的原创文章，遵循CC 4.0 BY-SA版权协议，转载请附上原文出处链接及本声明。
 >原文链接：https://blog.csdn.net/klordy_123/article/details/89084216
 
-##  RDD和DataFrame和DataSet三者间的区别
+## [Spark中Rdd、Dataframe、Dataset的区别](https://www.jianshu.com/p/0c8237dd9299)   
+
+对原理介绍不多，但是全面，准确。好文章。
+
+>### 3.5 编译时安全类型
+>
+>- **RDD**：RDD提供了熟悉的面向对象的编程风格以及编译时类型安全性。
+>- **DataFrame**：如果您尝试访问表中不存在的列，则Dataframe API不支持编译时检查类型错误，它仅在运行时检测类型错误。
+>- **DataSet**：强类型，支持面向对象的编程，也支持Dataframe的类似于SQL的API。
+>
+>### 3.6 优化器
+>
+>- **RDD**：**RDD中没有内置的优化引擎**。当使用结构化数据时，**RDD无法利用sparks高级优化器的优势**。例如，**catalyst optimizer and Tungsten execution engine**。开发人员需要根据实际情况优化每个RDD。
+>
+>- DataFrame
+>
+>  ：使用catalyst optimizer 进行优化。Dataframe在四个阶段进行优化：
+>
+>  a）Analyzing logical plan  分析逻辑计划。
+>
+>  b）Logical plan optimization 逻辑计划优化。
+>
+>  c）Physical planning 物理计划。
+>
+>  d）Code generation 代码生成，将查询的一部分编译为Java字节码。
+>
+>  下图举例说明了dataframe优化器的作用
+>
+>  ![image-20220612165031699](Spark学习记录.assets/image-20220612165031699.png)
+>
+>下图给出了优化阶段的简要概述:
+>
+>![image-20220612165048238](Spark学习记录.assets/image-20220612165048238.png)
+>
+>- **DataSet**：它包含用于优化查询计划的Dataframe Catalyst优化器的概念
+>
+>### 3.7 序列化
+>
+>- **RDD**：**每当Spark需要在群集内分发数据或将数据写入磁盘时，它都会将java对象序列化。**序列化单个Java和Scala对象的开销非常昂贵，并且需要在节点之间发送数据和结构，因此效率相对较低。
+>- **DataFrame**：**DataFrame可以将数据以二进制格式序列化到堆外存储（内存中），然后直接在此堆外内存上执行操作。**无需使用Java序列化来编码数据。它提供了Tungsten physical execution执行后端，该后端显式管理内存并动态生成字节码以进行表达式求值。**当然，也可以使用堆内内存空间**。
+>- **DataSet**：关于数据序列化，Spark中的Dataset API具有encoder 的概念，该encoder 处理JVM对象到表格形式之间的转换。它使用Spark内部的Tungsten二进制格式存储表格表示形式。**数据集允许对序列化数据执行操作并改善内存使用率。它允许按需访问单个属性，而无需对整个对象进行反序列化。相对于Java序列化的方式性能提升明显。**
+>
+>### 3.8 GC处理
+>
+>- **RDD**：创建和销毁单个对象会导致垃圾回收的开销，性能会因此降低。
+>- **DataFrame**：减少为数据集中的每一行构造单个对象时而产生的垃圾回收成本。
+>- **DataSet**：垃圾回收器不需要销毁对象，因为序列化通过 Tungsten执行。采用了堆外数据序列化。
+>
+>### 3.9 效率及内存使用
+>
+>- **RDD**：在Java和Scala对象上分别执行序列化会花费很多时间，效率会降低。
+>- **DataFrame**：使用堆外内存进行序列化可减少开销。它动态生成字节码，因此可以对该序列化数据执行许多操作。小型操作无需反序列化。
+>- **DataSet**：它允许对序列化数据执行操作并改善内存使用率。因此，它允许按需访问单个属性，而无需反序列化整个对象。
+>
+>### 3.13 应用场景
+>
+>- RDD
+>  1. 对数据集进行低级转换以及操作和控制，灵活性较强;
+>  2. 数据集是非结构化的，例如媒体流或文本流；
+>  3. 数据不是结构化的，不关心Dataframe和Dataset带来的性能提升。
+>
+>**DataFrame** 和 **DataSet**
+> Spark2.0后DataFrame和DataSet的API已经完全统一。在以下场景下考虑使用:
+>
+>1. 需要实现特殊需求的特定领域的API。请使用DataFrame或DataSet API
+>2. 需要高级表达式，过滤器，映射，聚合，平均值，总和，SQL查询，列访问以及对结构化数据使用lambda函数等，请使用DataFrame或DataSet API
+>3. 需要在编译时获得更高的类型安全性，想要输入类型的JVM对象，利用Catalyst优化并从Tungsten的高效代码生成中受益，请使用DataSet API
+>4. 如果要跨Spark库统一和简化API，请使用DataFrame或Dataset。
+>    如果是R用户，请使用DataFrames。
+>    如果是Python用户，则在需要更多控制权时，请使用DataFrames，RDD作为协助。
+
+##  ~~RDD和DataFrame和DataSet三者间的区别~~   
 
 https://blog.csdn.net/weixin_43087634/article/details/84398036
+
+文章脉络不够清晰。
 
 >在SparkSQL中Spark为我们提供了两个新的抽象，分别是DataFrame和DataSet。他们和RDD有什么区别呢？首先从版本的产生上来看：
 >**RDD (Spark1.0) —> Dataframe(Spark1.3) —> Dataset(Spark1.6)**
@@ -302,6 +416,103 @@ https://blog.csdn.net/weixin_43087634/article/details/84398036
 ## 公司这个同学对 spark 的学习资料总结的不错
 
 https://cf.jd.com/display/~songqingluan/spark
+
+## 05 | 调度系统：“数据不动代码动”到底是什么意思？
+
+># 调度系统中的核心组件有哪些？
+>
+>接下来，我们深入到流程中的每一步去探究 Spark 调度系统是如何工作的。不过在此之前，我们得先弄清楚调度系统都包含哪些关键组件，不同组件之间如何交互，它们分别担任了什么角色，才能更好地理解流程中的每一步。
+>
+>Spark 调度系统包含 3 个核心组件，分别是 **DAGScheduler、TaskScheduler 和 SchedulerBackend**。**这 3 个组件都运行在 Driver 进程中**，它们通力合作将用户构建的 DAG 转化为分布式任务，再把这些任务分发给集群中的 Executors 去执行。
+>
+>把它们和调度系统流程中 5 个步骤的对应关系总结在了下表中，可以看一看。
+>
+>![image-20220612175511876](Spark学习记录.assets/image-20220612175511876.png)
+>
+>## 1. DAGScheduler
+>
+>DAGScheduler 的主要职责有二：(stage划分、stage内创建task)
+>
+>-  一是**把用户 DAG 拆分为 Stages**，如果你不记得这个过程可以回顾一下上一讲的内容；
+>-  二是**在 Stage 内创建计算任务 Tasks**，这些任务囊括了用户通过组合不同算子实现的数据转换逻辑。然后，**执行器 Executors 接收到 Tasks，会将其中封装的计算函数应用于分布式数据分片，去执行分布式的计算过程。**
+>
+>不过，**如果我们给集群中处于繁忙或者是饱和状态的 Executors 分发了任务，执行效果会大打折扣。因此，在分发任务之前，调度系统得先判断哪些节点的计算资源空闲，然后再把任务分发过去。**那么，调度系统是怎么判断节点是否空闲的呢？
+>
+>## 2. SchedulerBackend
+>
+>SchedulerBackend 就是用来干这个事的，它是对于资源调度器的封装与抽象，**为了支持多样的资源调度模式如 Standalone、YARN 和 Mesos，SchedulerBackend 提供了对应的实现类。**在运行时，**Spark 根据用户提供的 MasterURL，来决定实例化哪种实现类的对象。MasterURL 就是你通过各种方式指定的资源管理器，如 --master spark://ip:host（Standalone 模式）、--master yarn（YARN 模式）。**
+>
+>**对于集群中可用的计算资源，SchedulerBackend 会用一个叫做 ExecutorDataMap 的数据结构，来记录每一个计算节点中 Executors 的资源状态。**ExecutorDataMap 是一种 HashMap，它的 Key 是标记 Executor 的字符串，Value 是一种叫做 ExecutorData 的数据结构，ExecutorData 用于封装 Executor 的资源状态，如 RPC 地址、主机地址、可用 CPU 核数和满配 CPU 核数等等，它相当于是对 Executor 做的“资源画像”。
+>
+>![image-20220612180156791](Spark学习记录.assets/image-20220612180156791.png)
+>
+>总的来说，对内，**SchedulerBackend 用 ExecutorData 对 Executor 进行资源画像；对外，SchedulerBackend 以 WorkerOffer 为粒度提供计算资源，WorkerOffer 封装了 Executor ID、主机地址和 CPU 核数，用来表示一份可用于调度任务的空闲资源。**显然，基于 Executor 资源画像，SchedulerBackend 可以同时提供多个 WorkerOffer 用于分布式任务调度。WorkerOffer 这个名字起得蛮有意思，Offer 的字面意思是公司给你提供的工作机会，结合 Spark 调度系统的上下文，就变成了使用硬件资源的机会。
+>
+>好了，到此为止，要调度的计算任务有了，就是 DAGScheduler 通过 Stages 创建的 Tasks；可用于调度任务的计算资源也有了，即 SchedulerBackend 提供的一个又一个 WorkerOffer。如果从供需的角度看待任务调度，DAGScheduler 就是需求端，SchedulerBackend 就是供给端。
+>
+>## 3. TaskScheduler
+>
+>左边有需求，右边有供给，如果把 Spark 调度系统看作是一个交易市场的话，那么中间还需要有个中介来帮它们对接意愿、撮合交易，从而最大限度地提升资源配置的效率。在 Spark 调度系统中，这个中介就是 TaskScheduler。TaskScheduler 的职责是，基于既定的规则与策略达成供需双方的匹配与撮合。
+>
+>![img](Spark学习记录.assets/82e86e1b3af101100015bcfd81f0f7yy.jpg)
+>
+>显然，TaskScheduler 的核心是任务调度的规则和策略，**TaskScheduler 的调度策略分为两个层次，一个是不同 Stages 之间的调度优先级，一个是 Stages 内不同任务之间的调度优先级。**
+>
+>首先，对于两个或多个 Stages，如果它们彼此之间不存在依赖关系、互相独立，在面对同一份可用计算资源的时候，它们之间就会存在竞争关系。这个时候，先调度谁、或者说谁优先享受这份计算资源，大家就得基于既定的规则和协议照章办事了。
+>
+>**对于这种 Stages 之间的任务调度，TaskScheduler 提供了 2 种调度模式，分别是 FIFO（先到先得）和 FAIR（公平调度）。**FIFO 非常好理解，在这种模式下，Stages 按照被创建的时间顺序来依次消费可用计算资源。这就好比在二手房交易市场中，两个人同时看中一套房子，不管两个人各自愿意出多少钱，谁最先交定金，中介就优先给谁和卖家撮合交易。
+>
+>你可能会说：“这不合常理啊！如果第二个人愿意出更多的钱，卖家自然更乐意和他成交。”没错，考虑到开发者的意愿度，TaskScheduler 提供了 FAIR 公平调度模式。在这种模式下，哪个 Stages 优先被调度，取决于用户在配置文件 fairscheduler.xml 中的定义。
+>
+>在配置文件中，**Spark 允许用户定义不同的调度池，每个调度池可以指定不同的调度优先级，用户在开发过程中可以关联不同作业与调度池的对应关系，这样不同 Stages 的调度就直接和开发者的意愿挂钩，也就能享受不同的优先级待遇。**对应到二手房交易的例子中，如果第二个人乐意付 30% 的高溢价，中介自然乐意优先撮合他与卖家的交易。
+>
+>说完了不同 Stages 之间的调度优先级，我们再来说说同一个 Stages 内部不同任务之间的调度优先级，Stages 内部的任务调度相对来说简单得多。**当 TaskScheduler 接收到来自 SchedulerBackend 的 WorkerOffer 后，TaskScheduler 会优先挑选那些满足本地性级别要求的任务进行分发。**众所周知，本地性级别有 4 种：**Process local < Node local < Rack local < Any**。从左到右分别是**进程本地性、节点本地性、机架本地性和跨机架本地性。**从左到右，计算任务访问所需数据的效率越来越差。
+>
+>进程本地性表示计算任务所需的输入数据就在某一个 Executor 进程内，因此把这样的计算任务调度到目标进程内最划算。同理，如果数据源还未加载到 Executor 进程，而是存储在某一计算节点的磁盘中，那么把任务调度到目标节点上去，也是一个不错的选择。再次，如果我们无法确定输入源在哪台机器，但可以肯定它一定在某个机架上，本地性级别就会退化到 Rack local。
+>
+>**DAGScheduler 划分 Stages、创建分布式任务的过程中，会为每一个任务指定本地性级别，本地性级别中会记录该任务有意向的计算节点地址，甚至是 Executor 进程 ID。换句话说，任务自带调度意愿，它通过本地性级别告诉 TaskScheduler 自己更乐意被调度到哪里去。**
+>
+>既然计算任务的个人意愿这么强烈，TaskScheduler 作为中间商，肯定要优先满足人家的意愿。这就像一名码农想要租西二旗的房子，但是房产中介 App 推送的结果都是东三环国贸的房子，那么这个中介的匹配算法肯定有问题。
+>
+>由此可见，**Spark 调度系统的原则是尽可能地让数据呆在原地、保持不动，同时尽可能地把承载计算任务的代码分发到离数据最近的地方，从而最大限度地降低分布式系统中的网络开销。毕竟，分发代码的开销要比分发数据的代价低太多，这也正是“数据不动代码动”这个说法的由来。**
+>
+>总的来说，**TaskScheduler 根据本地性级别遴选出待计算任务之后，先对这些任务进行序列化。然后，交给 SchedulerBackend，SchedulerBackend 根据 ExecutorData 中记录的 RPC 地址和主机地址，再将序列化的任务通过网络分发到目的主机的 Executor 中去。最后，Executor 接收到任务之后，把任务交由内置的线程池，线程池中的多线程则并发地在不同数据分片之上执行任务中封装的数据处理函数，从而实现分布式计算。**
+>
+># 小结
+>
+>梳理了调度系统工作流程的 5 个主要步骤：
+>
+>1. 将 DAG 拆分为不同的运行阶段 Stages；  DAGScheduler
+>2. 创建分布式任务 Tasks 和任务组 TaskSet；DAGScheduler
+>3. 获取集群内可用硬件资源情况；SchedulerBackend
+>4. 按照调度规则决定优先调度哪些任务 / 组；TaskScheduler
+>5. 依序将分布式任务分发到执行器 Executor；TaskScheduler --> SchedulerBackend --> executor
+>
+># 精选留言
+>
+>1、任务调度的时候不考虑可用内存大小吗?
+>
+>作者回复: 好问题~ 我们分资源调度和任务调度两种情况来说。
+>
+>Spark在做任务调度之前，SchedulerBackend封装的调度器，比如Yarn、Mesos、Standalone，实际上已经完成了资源调度，换句话说，整个集群有多少个containers/executors，已经是一件确定的事情了。而且，每个Executors的CPU和内存，也都是确定的了（因为你启动Spark集群的时候，使用配置项指定了每个Executors的CPU和内存分别是多少）。资源调度器在做资源调度的时候，确实是同时需要CPU和内存信息的。
+>
+>资源调度完成后，Spark开始任务调度，你的问题，其实是任务调度范畴的问题。也就是TaskScheduler在准备调度任务的时候，要事先知道都有哪些Executors可用，注意，是可用。也就是TaskScheduler的核心目的，在于获取“可用”的Executors。
+>
+>现在来回答你的问题，也就是：**为什么ExecutorData不存储于内存相关的信息。答案是：不需要。一来，TaskScheduler要达到目的，它只需知道Executors是否有空闲CPU、有几个空闲CPU就可以了，有这些信息就足以让他决定是否把tasks调度到目标Executors上去。二来，每个Executors的内存总大小，在Spark集群启动的时候就确定了，因此，ExecutorData自然是没必要记录像Total Memory这样的冗余信息。**
+>
+>再来说**Free Memory，首先，我们说过，Spark对于内存的预估不准**，再者，**每个Executors的可用内存都会随着GC的执行而动态变化**，因此，ExecutorData记录的Free Memory，永远都是过时的信息，TaskScheduler拿到这样的信息，也没啥用。**一者是不准，二来确实没用，因为TaskScheduler拿不到数据分片大小这样的信息，TaskScheduler在Driver端，而数据分片是在目标Executors，所以TaskScheduler拿到Free Memory也没啥用，因为它也不能判断说：task要处理的数据分片，是不是超过了目标Executors的可用内存。**
+>
+>综上，ExecutorData的数据结构中，只保存了CPU信息，而没有记录内存消耗等信息。不知道这些能不能解答你的问题？有问题再聊哈~
+
+## [ 内存管理基础：Spark如何高效利用有限的内存空间？](https://cf.jd.com/pages/viewpage.action?pageId=724051766)
+
+>动态内存管理  Execution Memory  和  Storage Memory 之间内存抢占的规则：
+>
+> Execution Memory 和 Storage Memory 之间的抢占规则，一共可以总结为 3 条：
+>
+>- 如果对方的内存空间有空闲，双方就都可以抢占；
+>- 对于 RDD 缓存任务抢占的执行内存，当执行任务有内存需要时，RDD 缓存任务必须立即归还抢占的内存，涉及的 RDD 缓存数据要么落盘、要么清除；
+>- **对于分布式计算任务抢占的 Storage Memory 内存空间，即便 RDD 缓存任务有收回内存的需要，也要等到任务执行完毕才能释放。**
 
 ## 印象笔记重点复习
 
@@ -853,7 +1064,183 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 
 # 文章
 
-## [Spark Executor内存管理](http://arganzheng.life/spark-executor-memory-management.html)  透彻
+## [SparkSQL InternalRow](https://blog.csdn.net/qq_41775852/article/details/111287973)   
+
+这篇文章能 弥补 SparkSQL 内核剖析 这本书中对 InternalRow 介绍的不足缺陷。
+
+自己对这块源码也需要看看。
+
+>**SparkSQL在执行物理计划操作RDD时，会全部使用RDD<InternalRow>类型进行操作。**
+>
+>lnternalRow 体系
+>在SparkSQL 内部实现中， InternalRow 就是用来表示一行行数据的类，物理算子树节点产生和转换的RDD 类即为RDD [InternalRow］ 。此外， InternalRow 中的每一列都是Catalyst 内部定义的数据类型。
+>
+>从类的定义来看， **InternalRow 作为一个抽象类，包含numFields 和update 方法，以及各列数据对应的get 与set 方法，但具体的实现逻辑体现在不同的子类中。需要注意的是， InternalRow中都是根据下标来访问和操作列元素的。**
+>
+>整个 InternalRow 体系比较简单，其具体的实现不多，包括**BaseGenericinternalRow、UnsafeRow 和JoinedRow** 3 个直接子类。
+>![image-20220612220910228](Spark学习记录.assets/image-20220612220910228.png)
+>
+>1. JoinedRow ：顾名思义，该类主要用于Join 操作，将两个InternalRow 放在一起形成新的InternalRow
+>
+>2. UnsafeRow ：**不采用Java 对象存储的方式，避免了JVM 中垃圾回收（ GC ）的代价。此外，UnsafeRow 对行数据进行了特定的编码，使得存储更加高效。UnsafeRow将java对象序列化为字节数组进行储存，使用JAVA Unsafe的位操作对象的fields进行set and get。** （用得最多）
+>
+>3. BaseGenericlnternalRow ：同样是一个抽象类，实现了InternalRow 中定义的所有get 类型方法，这些方法的实现都通过调用类中定义的genericGet 虚函数进行，该函数的实现在下一级子类中。
+>       1） GenericlnternalRow 构造参数是Array[ Any］类型，采用对象数组进行底层存储， genericGet 也是直接根据下标访问的。这里需要注意，数组是非拷贝的，因此一旦创建，就不允许通过set 操作进行改变。
+>
+>​           2） SpecificlnternalRow 则是以Array[MutableValue］为构造参数的，允许通过set 操作进行修改。
+>
+>​           3）MutableUnsafe Row 和UnsafeRow 相关，用来支持对特定的列数据进行修改   
+>
+>**由GenerateUnsafeProjection可以看出，最终将java对象转换为了UnsafeRow对象，序列化方式为ExpressionEncoder构造参数中的serializer。**
+>
+>将所有的JAVA对象序列化为UnsafeRow，构造LocalRelation逻辑计划。
+>
+>**LocalTableScanExec会将LocalRelation逻辑计划中的rows: Seq[InternalRow]使用UnsafeProjection转换为UnsafeRow。**这是因为LocalRelation逻辑计划中的rows还有可能是**GenericInternalRow**（其他的构造方式）。
+>
+>所以从这我们可以知道，**LocalTableScanExec物理计划得到的RDD<InternalRow>都是UnsafeRow类型。同理FileSourceScanExec、RowDataSourceScanExec等数据源算子得到的RDD<InternalRow>都是UnsafeRow类型，即序列化的二进制字节数组。**（重要）
+>
+>## [Shuffle](https://so.csdn.net/so/search?q=Shuffle&spm=1001.2101.3001.7020) RDD[InternalRow]
+>
+>SparkSQL 中的 Shuffle 使用 **ShuffleExchangeExec** 物理算子实现，
+>
+>传入ShuffleDependency， 构造**ShuffledRowRDD**。shuffle write和shuffle read的使用的序列化器和反序列化器是ShuffleDependency构造参数中的serializer。
+>
+>定义如下：
+>
+>![image-20220612225339309](Spark学习记录.assets/image-20220612225339309.png)
+>
+>可见， ShuffleExchangeExec 中构造 ShuffleDependency 是传入的serializer是其自身内部的serializer变量。
+>
+>**所以ShuffleExchangeExec在序列化时，shuffle write将UnsafseRow序列化为二进制字节数组写入本地文件，shuffle read再将二进制字节数组反序列化为UnsafseRow。由于shuffle时只需要传输对象数据，而对象早已被序列化存入了UnsafseRow，所以UnsafeRowSerializer只需要将UnsafseRow内部对象的序列化字节数组写出或者读取即可，节省了序列化和反序列化的消耗。**
+>
+>Transform RDD[InternalRow]
+>SparkSQL的Transform操作有两种类型，一种为强类型化转换算子，另一种为利用内置的schmea隐式转换算子。
+>
+>强类型化转换算子：filter(func : scala.Function1[T, scala.Boolean])，map[](func : scala.Function1[T, U])，需要明确申明操作的数据类型，并且传入对象的Encoder。
+>
+>利用内置的schema隐式转换算子：filter(conditionExpr : root.scala.Predef.String)，select(col: String, cols: String*)，不需要说明操作数据类型，直接利用内置的schmea操作数据列。
+>
+>### 强类型化转换算子
+>
+>**对于强类型化转换算子**，比如map操作，DataSet源码中：
+>
+>可以看到map操作会MapElements逻辑算子的上下接上DeserializeToObject和SerializeFromObject逻辑算子，最终会转换为DeserializeToObjectExec和SerializeFromObjectExec物理算子，其利用Encoder对UnsafeRow进行序列化和反序列化。
+>
+>DeserializeToObjectExec 先将 UnsafeRow中的字节数组反序列化为JAVA对象储存在GenericInternalRow 中，MapElement 再对 GenericInternalRow 中的对象进行 map 操作，然后SerializeFromObjectExec 再将 GenericInternalRow 中的 JAVA 对象序列化字节数组储存在UnsafeRow中。
+>
+>### 利用内置的schmea隐式转换算子
+>
+>**然而对于利用内置的schmea隐式转换算子**，比如filter，select**可以利用内置的schmea直接操作Unsafe中的二进制字节数组，而不需要反序列化整个JAVA对象，从而节省了序列化/反序列化的消耗。**
+>
+>## 连续的强类型化转换算子
+>
+>如果Dataset连接了多个连续的强类型化转换算子，那么如果每一次强类型化转换算子都进行一次反序列化和序列化，那就消耗太大。Spark对此进行了优化，将反序列化操作，即DeserializeToObjectExec放到第一个强类型化转换算子前，将序列化操作SerializeFromObjectExec，放到最后一个强类型化转换算子后面。
+>
+>可以看到DeserializeToObject和SerializeFromObject中间包括了连续的多个强类型化转换算子。
+>
+>由于filter(“x > 2”)是利用内置的schmea隐式转换算子，其操作的是二进制序列化字节数组，所以不能包含在DeserializeToObject和SerializeFromObject之间。同理ExchangeExec操作的也是是二进制序列化字节数组，也不能包含在DeserializeToObject和SerializeFromObject之间。
+>
+>Encoder对InternalRow的影响
+>Encoder是将JAVA对象转换为InternalRow的工具。SparkSQL提供了Encoders的很多静态工厂方法获得Encoder(实际上目前获得的都是ExpressionEncoder)。大致可以分为几类:
+>
+>java原始类型: Encoders.BOOLEAN等
+>scala原始类型: Encoders.scalaBoolean等.(多一个scala前缀)
+>javaBean类型: bean[T](beanClass: Class[T])。但目前成员只支持List容器，不支持其他的容器。支持原始类型或嵌套javaBean。
+>kryo序列化类型: kryo[T: ClassTag]；
+>java序列化类型: javaSerialization[T: ClassTag]；
+>Tuple类型: 从Tuple2到Tuple5.
+>Product类型: 也就是case class.
+>其中前三种是直接调用ExpressionEncoder，第四第五种本质上是间接调用了ExpressionEncoder。
+>
+>所以第四第五后两种序列化本质上是把整个对象看做一个二进制类型，其储存在UnsafeRow中时，只有一个列value，其类型时binary。所以Spark没有办法操作其二进制数据直接获取或者设置field，只能反序列化成JAVA对象才能进行操作，不利于后续优化和减少反序列化。
+>
+>所以在使用DataSet传入kryo或者javaSerialization的Encoder时，不能使用内置的schmea隐式转换算子，因为内置的schmea只有一个类型为binary的列（value），只能使用强类型转换算子，效率较低。
+>
+>所以要尽量避免使用kryo或者javaSerialization的Encoder，而是用bean类型的Encoder（具有setter\getter函数）和其他类型的Encoder，其可以直接将JAVA对象的field转换为UnsafeRow中的列，从而使用利用内置的schmea隐式转换算子，减少序列化/反序列化的消耗。
+>
+>SparkSQL使用InternalRow优化RDD操作。对于文件数据源，直接将文件的二进制数据读取到UnsafeRow中，不需要反序列化对象。在shuffle wirte时，直接将UnsafeRow中的二进制数组直接写出，不需要序列化对象， shuffle read时，直接读入二进制数组储存在UnsafeRow中，不需要反序列化对象。当进行数据操作时，直接操作UnsafeRow中的二进制数组，而不需要反序列化整个JAVA对象。所以UnsafeRow大大减少了序列化和反序列的消耗，并且可以减少数组在内存中占用的空间，避免fullgc，可以精确的计算内存使用情况，避免OOM。
+>
+>但是对于一些对象，其schema并不是很明确，只能使用kryo或者java方式进行序列化，对于这种类型的数据进行操作时，只能使用强类型转换算子。强类型转换算子会对UnsafeRow中二进制数据进行反序列进行操作，最终再序列化为二进制数据，储存再UnsafeRow中，所以效率较低。
+
+## [spark几个基础知识点](https://runzhliu.github.io/posts/spark-%E9%9D%A2%E8%AF%95%E9%A2%98%E7%B3%BB%E5%88%97-1/)
+
+># Spark 作业提交流程是怎么样的
+>
+>1. spark-submit 提交代码，执行 `new SparkContext()`，在 SparkContext 里构造 DAGScheduler 和 TaskScheduler。
+>2. TaskScheduler 会通过后台的一个进程，连接 Master，向 Master 注册 Application。
+>3. Master 接收到 Application 请求后，会使用相应的**资源调度算法**，在 Worker 上为这个 Application 启动多个 Executor
+>4. Executor 启动后，**会自己反向注册到 TaskScheduler 中。所有 Executor 都注册到 Driver 上之后，SparkContext 结束初始化，接下来往下执行我们自己的代码。**
+>5. 每执行到一个 Action，就会创建一个 Job。Job 会提交给 DAGScheduler。
+>6. DAGScheduler 会将 Job 划分为多个 Stage，然后每个 Stage 创建一个 TaskSet。
+>7. **TaskScheduler 会把每一个 TaskSet 里的 Task，提交到 Executor 上执行。**
+>8. Executor 上有**线程池，每接收到一个 Task，就用 TaskRunner 封装，然后从线程池里取出一个线程执行这个 task。(TaskRunner 将我们编写的代码，拷贝，反序列化，执行 Task，每个 Task 执行 RDD 里的一个 partition)**
+>
+># 9 Spark 经常说的 Repartition 有什么作用
+>
+>一般上来说有多少个 Partition，就有多少个 Task，Repartition 的理解其实很简单，就是把原来 RDD 的分区重新安排。这样做有什么好坏呢？
+>
+>1. 避免小文件
+>2. 减少 Task 个数
+>3. 但是会增加每个 Task 处理的数据量，Task 运行时间可能会增加
+
+## Tungsten 钨丝计划
+
+>```
+>为什么DataFrame比RDD在存储和计算上的效率更高呢?
+>    这主要得益于Tungsten项目,Tungsten 做的优化概括起来说就是由Spark自己来管理内存而不是使用JVM,这样可以避免JVM GC带来的性能损失;
+>    内存中的Java对象呗存储成Spark自己的二进制格式,更加紧凑,节省内存空间,而且能更好的估计数据量大小和内存使用情况;
+>    计算直接发生在二进制格式上,省去了序列化和反序列化时间
+>what: 像传统的Hadoop/Hive系统,磁盘IO是一个很大的瓶颈,而对于像Spark这样的计算框架,主要的瓶颈在于CPU和内存,Tungsten主要做了哪些优化?
+>    1. 基于JVM的语言带来得到问题:GC问题和Java对象的内存开销.例如一个字符串"abcd" 理论上只有4个bytes,但是用Java String 类型来存储却需要48个bytes.Spark的改进就是自己管理内存,不适用JVM来管理了,使用的工具是sun.misc.Unsage. DataFrame的每一行就是一个UnsafeRow.这块内存存的啥东西只有Spark自己能读懂,有了这种特有的二进制存储格式后,DataFrame的算则直接控制二进制数据,同时又省去了很多序列化和反序列化的
+>开销.
+>    2. Cache-aware的计算. 现在Spark已经是内存计算引擎了,但是能不能更进一步呢?能不能更好的利用CPU的L1/L2/L3缓存的优势呢? 因为CPU的访问访问效率更高.这个优化点也不是意淫出来的,是在Profile了很多Spark应用之后得到的结论,发现很多CPu的时间浪费在等待从内存中取数据的过程.所以Tungsten中就设计和实现了一些列的cache-friendly 的算法和数据结构来加速这个过程,例如aggregations.joins 和 shuffle操作中进行快速排序和hash操作.以sort 为例 Spark已经实现了cache-aware的sort算法,比原来的性能提升至少有3倍.在传统的排序中是通过指针来索引数据的，但是缺点就是CPU cache 命中率不够高，因为我们需要随机访问 record 做比较。实际上 quicksort 算法是能够非常好的利用 cache 的，主要是我们的 record 不是连续存储的。Spark 的优化就是存储一个 key prefix 和指针在一起，那么就可以通过比较 key prefix 来直接实现排序，这样 CPU cache的命中率就会高很多。例如如果我们需要排序的列是一个 string 类型，那么我们可以拿这个 string 的 UTF-8 编码的前 8 个字节来做 key prefix，并进行排序。
+>    3. 运行时代码生成
+>    运行时代码生成能免去昂贵的虚函数调用,同时也省去了对Java基本类型装箱之类的操作了.
+>    Spark Sql 将运行时代码生成用于表达式的求职,效果显著.
+>```
+>
+>
+
+## ShuffleReader的实现原理
+
+https://zhuanlan.zhihu.com/p/282701083
+
+>Shuffle Reader 的具体实现类只有一个，那就是：BlockStoreShuffleReader。
+>
+>### **BlockStoreShuffleReader类**
+>
+>该类实现了接口的read函数，在该函数中实现了数据块的读取。
+>
+>### **read函数**
+>
+>该函数实现了Shuffle过程数据读取的功能，执行步骤如下：
+>
+>1）创建一个能够获取多个数据块的迭代器：ShuffleBlockFetcherIterator对象，它可以从本地或远端获取数据块，本地数据块通过**BlockManager对象进行获取；远端数据块通过数据块传输服务：BlockTransferService服务来获取**。该迭代器返回(BlockID, InputStream)元组。
+>
+>2）获取一个序列化器对象：serializerInstance
+>
+>3）遍历第1）步返回的(BlockID, InputStream)元组数据，并通过序列化器对象的deserializeStream函数来读取数据，把数据还原成key/value的形式，从而得到一个key/value的迭代器。要注意的是：当所有的数据读完后会关闭该读入流。
+>
+>4）更新任务的metrics值
+>
+>5）为了支持任务的取消，**需要创建一个可中断的迭代器，来读取数据。**
+>
+>6）若有**聚合操作，会判断是否已经在map进行了聚合，若是则读取的是已经聚合好的数据；若没有在map端进行聚合，则会先通过ExternalAppendOnlyMap来对数据进行聚合，若内存不够，则会把数据写到磁盘上，然后返回一个读取结果的迭代器。若没有聚合操作，则直接返回数据的迭代器。**
+>
+>7）若有排序操作，会创建一个**ExternalSorter类的对象，通过对象来对数据进行排序，然后把排好序的结果保存到结果迭代器中。**
+>
+>### **ShuffleReader的实现要点总结**
+>
+>- Shuffle过程可以从两个地方来读取数据块：**一个是本地的block，一个是远程的block。**
+>- **远程的block读取是通过向BlockTransferService这个服务发送读取数据块请求来获取数据数据。**
+>- 那么如何区分是从本地读，还是从远程读取呢？**是通过每个块的executorID来区分的，本地环境的executorID和块的id相等就是从本地读，若不相等就会从远端节点读取数据。**
+>- **shuffle reader读取数据过程被封装在一个迭代器类：ShuffleBlockFetcherIterator中**。
+>- **BlockTransferService 这个服务的实现有多种，目前比较好的实现是通过netty框架来实现的。**
+>- **在从远端节点读取shuffle数据时，可以设置一个最大读取数据的缓冲区大小，也就是可以设置参数：spark.reducer.maxReqSizeShuffleToMem，该参数默认是200m。若机器的内存足够大，而且想提升shuffle的性能可以适当的调大该参数。**
+>- **若在向远端发送获取数据块请求时，发生延迟，或则缓冲区满了需要把数据写入到磁盘时发生了延迟，spark会把请求放到一个延迟队列中。**
+>- **当从远端节点读取shuffle过程中的数据时，发生了异常，可能需要进行重试，重试的次数可以通过一个参数进行控制。**
+
+## [Spark Executor内存管理](http://arganzheng.life/spark-executor-memory-management.html) 
 
 >### 堆内内存 (On-heap Memory)
 >
@@ -1756,7 +2143,7 @@ Dataset 是结构化 API 的基本类型。我们已经使用了 DataFrames，**
 
 ### Logical Planning 逻辑规划
 
-Spark使用 catalog（所有表和DataFrame信息的存储库）解析分析器中的列和表。如果所需的表或列名称在目录中不存在，则分析器可能会拒绝未解析的逻辑计划。如果分析器可以解析问题，则结果将通过Catalyst Optimizer传递，Catalyst Optimizer是一组规则的集合，这些规则试图通过向下推理谓词（predicates）或选择（selections）来优化逻辑计划。软件包可以扩展Catalyst，以包括其用于特定领域优化的规则。
+Spark使用 catalog（所有表和DataFrame信息的存储库）解析分析器中的列和表。如果所需的表或列名称在目录中不存在，则分析器可能会拒绝未解析的逻辑计划。如果分析器可以解析问题，则结果将通过Catalyst Optimizer传递，**Catalyst Optimizer**是一组规则的集合，这些规则试图通过向下推理谓词（predicates）或选择（selections）来优化逻辑计划。软件包可以扩展Catalyst，以包括其用于特定领域优化的规则。
 
 ### Physical Planning 物理规划
 
