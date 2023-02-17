@@ -92,6 +92,24 @@ public Map<TopicAndPartition, Long> getTopicAndPartitionOffset(Set<String> topic
 
 # 问题
 
+## [Spark 2: how does it work when SparkSession enableHiveSupport() is invoked](https://stackoverflow.com/questions/52169175/spark-2-how-does-it-work-when-sparksession-enablehivesupport-is-invoked)
+
+>Setting `enableHiveSupport` doesn't mean, that query is calculated in Hive.
+>
+>It's only about **Hive catalog**. If you use `enableHiveSupport`, then you can:
+>
+>- **write and read to/from Hive persistent metastore**
+>- **use Hive's UDFs**
+>- **use Hive's SerDe**
+>
+>All of it is connected directly with Catalog, not execution itself
+>
+>**Historically also Hive QL parsing was done using Hive, but now Spark does it without calling Hive**
+>
+>> I should claim the time performance of queries executed with spark.sql([hiveQL query]) refer to Spark or Hive.
+>
+>As stated above, it's performance of Spark.
+
 # 官网
 
 ## [Accumulators](https://spark.apache.org/docs/2.4.5/rdd-programming-guide.html#broadcast-variables)
@@ -202,9 +220,72 @@ https://spark.apache.org/docs/1.6.3/streaming-programming-guide.html
 -  When running a Spark Streaming program locally, do not use “local” or “local[1]” as the master URL. Either of these means that only one thread will be used for running tasks locally. If you are using a input DStream based on a receiver (e.g. sockets, Kafka, Flume, etc.), then the single thread will be used to run the receiver, leaving no thread for processing the received data. Hence, when running locally, always use “local[*n*]” as the master URL, where *n* > number of receivers to run (see [Spark Properties](https://spark.apache.org/docs/1.6.3/configuration.html#spark-properties) for information on how to set the master).
 - Extending the logic to running on a cluster, the number of cores allocated to the Spark Streaming application must be more than the number of receivers. Otherwise the system will receive data, but not be able to process it.
 
-
-
 # Spark 学习笔记
+
+## Spark类加载器
+
+https://www.jianshu.com/p/bf88d05dd98a
+
+>简单来说Spark将所有的依赖分为两类：
+>
+>**系统依赖**
+>由Spark classpath、spark.driver.extraLibraryPath、spark.executor.extraClassPath等定义的依赖。系统依赖指定的jar包最终都是放到了AppClassLoader的classpath里，由AppClassLoader完成加载
+>**用户依赖**
+>由–jars参数、spark.jars配置、sparkContext.addjar定义的依赖。用户依赖会放到Spark自定义的MutableURLClassLoader或者ChildFirstURLClassLoader的classpath中，由其完成加载。
+>
+>**MutableURLClassLoader和ChildFirstURLClassLoader**
+>
+>Spark 的用户依赖由 **ChildFirstURLClassLoader**和**MutableURLClassLoader** 类加载器进行加载，从而与系统依赖进行隔离。如果spark.executor.userClassPathFirst/spark.driver.userClassPathFirst
+>spark.executor.userClassPathFirst为true，则会使用ChildFirstURLClassLoader，否则使用MutableURLClassLoader。
+
+## 类加载器和类的命名空间
+
+>同一个命名空间内的类时相互可见的。
+>
+>**子加载器的命名空间包含所有的父加载器的命名空间。因此由子加载器加载的类可以看见父加载器加载的类。**例如系统类加载器加载的类能看见根类加载器加载的类。
+>
+>由父加载器加载的类不能看见子加载器加载的类。
+>
+>如果两个加载器之间没有直接或者间接的父子关系，那么它们各自加载的类相互不可见。
+>
+>1. 可以确保java核心库的类型安全: 例如所有的JAVA应用都至少会引用java.lang.Object类，也就是说在jvm的运行期间,java.lang.Object类会被加载到java虚拟机中,如果这个过程是由自己定义的java类加载器完成的,那么很有可能在jvm中存在多个版本的java.lang.Object类，也就是说在jvm的运行期间而这些类之间是相互不兼容的(命名空间不同导致的)。
+>
+>借助双亲委派机制,java核心类库的加载必须由启动类加载器加载,从而确保java中使用的核心类库的版本统一，他们之间是相互兼容的
+>
+>2. 可以保证java核心类库加载的类不会被自定义类所替代。
+>
+>3. 不同类的加载器可以为相同名称的类(binary name)创建额外的命名空间。相同名称的类可以并存与不同命名空间的内存中，不同类加载器加载的类之间是相互不兼容的就相当于在java虚拟机内部创建了一个又一个相互独立并且隔离的的java空间,这类技术在很多框架都得到了使用。
+>
+>在运行期间，一个Java类是由该类的完全限定名(binary name,二进制名)和用于加载该类的定义类加载器(defining loader)所共同决定的。如果同样名字(即相同的限定名)的类是由两个不同的加载类所加载，那么这些类就是不同的，即便.class文件的字节码完全一样，并且从相同的位置加载也是如此。
+
+
+
+## spark 使用 executor.userClassPathFirst 加载类时报类加载异常
+
+```
+[Driver] : User class threw exception: org.apache.spark.sql.AnalysisException: java.lang.LinkageError: loader constraint violation: when resolving method "org.slf4j.LoggerFactory.getLogger(Ljava/lang/String;)Lorg/slf4j/Logger;" the class loader (instance of org/apache/spark/sql/hive/client/IsolatedClientLoader$$anon$1) of the current class, org/apache/commons/logging/impl/SLF4JLogFactory, and the class loader (instance of org/apache/spark/util/ChildFirstURLClassLoader) for the method's defining class, org/slf4j/LoggerFactory, have different Class objects for the type org/slf4j/Logger used in the signature;
+org.apache.spark.sql.AnalysisException: java.lang.LinkageError: loader constraint violation: when resolving method "org.slf4j.LoggerFactory.getLogger(Ljava/lang/String;)Lorg/slf4j/Logger;" the class loader (instance of org/apache/spark/sql/hive/client/IsolatedClientLoader$$anon$1) of the current class, org/apache/commons/logging/impl/SLF4JLogFactory, and the class loader (instance of org/apache/spark/util/ChildFirstURLClassLoader) for the method's defining class, org/slf4j/LoggerFactory, have different Class objects for the type org/slf4j/Logger used in the signature;
+	at org.apache.spark.sql.hive.HiveExternalCatalog.withClient(HiveExternalCatalog.scala:106)
+```
+
+解决方案：
+
+使用 maven shade 插件，给本地jar 包依赖的 org.slf4j 重命名。
+
+为什么 IsolatedClientLoader 加载的 Logger 和 spark lib 中加载的Logger 不会报类加载冲突？（**子加载器能看到父加载的命名空间**）看下 sparkSQL 内核剖析对 IsolatedClientLoader 的介绍。
+
+## [spark程序jar与spark lib jar冲突，加载顺序](https://www.jianshu.com/p/0fe48bc43a8c)
+
+>那是什么原因造成spark程序本地能运行，yarn上就“ NoSuchMethodError”了呢？
+>
+>原因是本地的jar包被SPARK_HOME/lib中的jar覆盖。spark程序在提交到yarn时，除了上传用户程序的jar，还会上传SPARK_HOME的lib目录下的所有jar包（参考附录2 )。如果你程序用到的jar与SPARK_HOME/lib下的jar发生冲突，那么默认会优先加载SPARK_HOME/lib下的jar，而不是你程序的jar，所以会发生“ NoSuchMethodError”。
+>
+>上面的例子就是因为我程序的jar用的是guava18版本（mvn dependency:tree可查出版本），但是SPARK_HOME/lib下用的是guava14版本。lib下的guava14覆盖了用户的guava18，而guava14中并没有splitToList()方法, 所以报错。
+>
+># 解决方案
+>
+>由于默认情况下，优先级**SPARK_HOME/lib/jar包 > 用户程序中的jar包**， 如果想让用户程序jar优先执行，那么要使用 **spark.yarn.user.classpath.first (spark1.3以前）**或者 **spark.executor.userClassPathFirst 和spark.driver.userClassPathFirst** 参数。
+> 这些参数能让用户的jar覆盖SPARK_HOME/lib的jar。在spark conf中将他们设置为"true"即可.
 
 ## [how to broadcast the content of a RDD efficiently](https://stackoverflow.com/questions/50341510/how-to-broadcast-the-content-of-a-rdd-efficiently)
 
@@ -1063,6 +1144,23 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 >重连的总的最大时间，每次连接失败，重连时间都会指数级增加，每次增加的时间会存在20%的随机抖动，以避免连接风暴。
 
 # 文章
+
+## [Spark基础：配置优化与推测执行](https://zhuanlan.zhihu.com/p/151833314)
+
+>## 推测执行
+>
+>在Spark中任务会以DAG图的方式并行执行，每个节点都会并行的运行在不同的executor中，但是有的任务可能执行很快，有的任务执行很慢，比如**网络抖动、性能不同、数据倾斜**等等。有的Task很慢就会成为整个任务的瓶颈，此时可以触发 推测执行 (speculative) 功能，为长时间的task重新启动一个task，哪个先完成就使用哪个的结果，并Kill掉另一个task。
+>
+>```text
+># 开启speculative，默认关闭
+>spark.speculation=true 
+># 检测周期，单位毫秒
+>spark.speculation.interval=100
+># 任务完成的百分比，比如同一个stage中task的完成占比
+>spark.speculation.quantile=0.75
+># 任务延迟的比例，比如当75%的task都完成，那么取他们的中位数跟还未执行完的任务作对比。如果超过1.5倍，则开启推测执行。
+>spark.speculation.multiplier=1.5
+>```
 
 ## [SparkSQL InternalRow](https://blog.csdn.net/qq_41775852/article/details/111287973)   
 
