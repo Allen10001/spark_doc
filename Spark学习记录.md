@@ -1,7 +1,3 @@
-# 一些异常
-
-spark local SecurityManager: authentication disabled; ui acls disabled; users with view permissions: Set(allen); groups with view permissions: Set(); users with modify permissions: Set(allen); groups with modify permissions: Set() Exception in thread "main" java.lang.NoSuchMethodError: io.netty.buffer.PooledByteBufAllocator.defaultNumHeapArena()
-
 ## [Spark 2.3 java.lang.NoSuchMethodError: io.netty.buffer.PooledByteBufAllocator.metric](https://stackoverflow.com/questions/50388919/spark-2-3-java-lang-nosuchmethoderror-io-netty-buffer-pooledbytebufallocator-me)
 
 > found the solution. This is because hadoop binaries compiled with older version and need us to just replace them. I did not faced any issue with hadoop by replacing them.
@@ -112,8 +108,52 @@ public Map<TopicAndPartition, Long> getTopicAndPartitionOffset(Set<String> topic
 
 # 官网
 
+
+
+## RDD Persistence
+
+| Storage Level                          | Meaning                                                      |
+| :------------------------------------- | :----------------------------------------------------------- |
+| MEMORY_ONLY                            | Store RDD as deserialized Java objects in the JVM. If the RDD does not fit in memory, some partitions will not be cached and will be recomputed on the fly each time they're needed. This is the default level. |
+| MEMORY_AND_DISK                        | Store RDD as deserialized Java objects in the JVM. If the RDD does not fit in memory, store the partitions that don't fit on disk, and read them from there when they're needed. |
+| MEMORY_ONLY_SER (Java and Scala)       | Store RDD as *serialized* Java objects (**one byte array per partition**). This is generally more space-efficient than deserialized objects, especially when using a [fast serializer](https://spark.apache.org/docs/2.4.5/tuning.html), but **more CPU-intensive to read**. |
+| MEMORY_AND_DISK_SER (Java and Scala)   | Similar to MEMORY_ONLY_SER, but spill partitions that don't fit in memory to disk instead of recomputing them on the fly each time they're needed. |
+| DISK_ONLY                              | Store the RDD partitions only on disk.                       |
+| MEMORY_ONLY_2, MEMORY_AND_DISK_2, etc. | Same as the levels above, but replicate each partition on two cluster nodes. |
+| OFF_HEAP (experimental)                | Similar to MEMORY_ONLY_SER, but store the data in [off-heap memory](https://spark.apache.org/docs/2.4.5/configuration.html#memory-management). This requires off-heap memory to be enabled. |
+
+### Which Storage Level to Choose?
+
+Spark’s storage levels are meant to provide different trade-offs between memory usage and CPU efficiency. We recommend going through the following process to select one:
+
+- If your RDDs fit comfortably with the default storage level (`MEMORY_ONLY`), leave them that way. This is the most CPU-efficient option, allowing operations on the RDDs to run as fast as possible.
+- If not, try using `MEMORY_ONLY_SER` and [selecting a fast serialization library](https://spark.apache.org/docs/2.4.5/tuning.html) to make the objects much more space-efficient, but still reasonably fast to access. (Java and Scala)
+- **Don’t spill to disk unless the functions that computed your datasets are expensive, or they filter a large amount of the data. Otherwise, recomputing a partition may be as fast as reading it from disk.**
+- **Use the replicated storage levels if you want fast fault recovery** (e.g. if using Spark to serve requests from a web application). *All* the storage levels provide full fault tolerance by recomputing lost data, but the replicated ones let you continue running tasks on the RDD without waiting to recompute a lost partition.
+
+### Removing Data
+
+Spark automatically monitors cache usage on each node and drops out old data partitions in a **least-recently-used (LRU)** fashion. If you would like to manually remove an RDD instead of waiting for it to fall out of the cache, use the **`RDD.unpersist()` method.**
+
+# Shared Variables
+
+## Broadcast Variables
+
+**Broadcast variables allow the programmer to keep a read-only variable cached on each machine rather than shipping a copy of it with tasks.** They can be used, for example, to give every node a copy of a large input dataset in an efficient manner. Spark also attempts to distribute broadcast variables using efficient broadcast algorithms to reduce communication cost.
+
+```java
+Broadcast<int[]> broadcastVar = sc.broadcast(new int[] {1, 2, 3});
+
+broadcastVar.value();
+// returns [1, 2, 3]
+```
+
 ## [Accumulators](https://spark.apache.org/docs/2.4.5/rdd-programming-guide.html#broadcast-variables)
 
+>Accumulators are variables that are only “added” to through an associative and commutative operation and can therefore be efficiently supported in parallel. They can be used to implement counters (as in MapReduce) or sums. Spark natively supports accumulators of numeric types, and programmers can add support for new types.
+>
+>As a user, you can create named or unnamed accumulators. As seen in the image below, a named accumulator (in this instance `counter`) will display in the web UI for the stage that modifies that accumulator. Spark displays the value for each accumulator modified by a task in the “Tasks” table.
+>
 >For accumulator updates performed inside **actions only**, Spark guarantees that each task’s update to the accumulator will only be applied once, i.e. **restarted tasks will not update the value**. In transformations, users should be aware of that each task’s update may be applied more than once if tasks or job stages are re-executed.
 >
 >Accumulators do not change the lazy evaluation model of Spark. If they are being updated within an operation on an RDD, their value is only updated once that RDD is computed as part of an action. Consequently, accumulator updates are not guaranteed to be executed when made within a lazy transformation like `map()`. The below code fragment demonstrates this property:
@@ -129,8 +169,6 @@ public Map<TopicAndPartition, Long> getTopicAndPartitionOffset(Set<String> topic
 >- 少加：transform 算子中调用累加器，如果没有action算子，不会被执行
 >- 多加：action 调用多次，就会被计算多次
 
-## Broadcast Variables
-
 
 
 ## [spark 堆内和堆外内存管理](https://zhuanlan.zhihu.com/p/517214555)
@@ -141,13 +179,13 @@ public Map<TopicAndPartition, Long> getTopicAndPartitionOffset(Set<String> topic
 >
 >- 堆内内存的大小由 `–executor-memory` 或 `spark.executor.memory` 参数配置。
 >
->- Executor 内运行的并发任务共享 JVM 堆内内存：
+>- **Executor 内运行的并发任务共享 JVM 堆内内存：**
 >
->- - 这些任务在缓存 RDD 数据和广播（Broadcast）数据时占用的内存被规划为存储（Storage）内存；
->  - 这些任务在执行 Shuffle 时占用的内存被规划为执行（Execution）内存；
->  - 剩余的部分不做特殊规划，那些 Spark 内部的对象实例，或者用户定义的 Spark 应用程序中的对象实例，均占用剩余的空间。
+>- 这些任务在缓存 RDD 数据和广播（Broadcast）数据时占用的内存被规划为**存储（Storage）内存**；
+> - 这些任务在执行 Shuffle 时占用的内存被规划为**执行（Execution）内存**；
+> - 剩余的部分不做特殊规划，那些 Spark 内部的对象实例，或者用户定义的 Spark 应用程序中的对象实例，均占用剩余的空间。
 >
->- Spark 对堆内内存的管理是一种逻辑上的”规划式”的管理，因为对象实例占用内存的申请和释放都由 JVM 完成，Spark只能在申请后和释放前记录这些内存。
+>- **Spark 对堆内内存的管理是一种逻辑上的”规划式”的管理，因为对象实例占用内存的申请和释放都由 JVM 完成，Spark只能在申请后和释放前记录这些内存**。  （OOM？）
 >
 >申请内存流程如下：
 >
@@ -166,11 +204,11 @@ public Map<TopicAndPartition, Long> getTopicAndPartitionOffset(Set<String> topic
 >
 >- 原因：
 >
->- - 序列化的对象，由于是字节流的形式，其占用的内存大小可直接计算；
->  - **非序列化的对象，其占用的内存是通过周期性地采样近似估算而得，这种方法降低了时间开销但是有可能误差较大，导致某一时刻的实际内存有可能远远超出预期；**
->  - 此外，**在被 Spark 标记为释放的对象实例，很有可能在实际上并没有被 JVM 回收，导致实际可用的内存小于 Spark 记录的可用内存。**
->  - 结果：**所以 Spark 并不能准确记录实际可用的堆内内存，从而也就无法完全避免内存溢出（OOM, Out of Memory）的异常。**
->  - 虽然不能精准控制堆内内存的申请和释放，但 Spark 通过对存储内存和执行内存各自独立的规划管理，可以决定是否要在存储内存里缓存新的 RDD，以及是否为新的任务分配执行内存，在一定程度上可以提升内存的利用率，减少异常的出现。
+>- 序列化的对象，由于是字节流的形式，其占用的内存大小可直接计算；
+> - **非序列化的对象，其占用的内存是通过周期性地采样近似估算而得，这种方法降低了时间开销但是有可能误差较大，导致某一时刻的实际内存有可能远远超出预期；**
+> - 此外，**在被 Spark 标记为释放的对象实例，很有可能在实际上并没有被 JVM 回收，导致实际可用的内存小于 Spark 记录的可用内存。**
+> - 结果：**所以 Spark 并不能准确记录实际可用的堆内内存，从而也就无法完全避免内存溢出（OOM, Out of Memory）的异常。**
+> - 虽然不能精准控制堆内内存的申请和释放，但 Spark 通过对存储内存和执行内存各自独立的规划管理，可以决定是否要在存储内存里缓存新的 RDD，以及是否为新的任务分配执行内存，在一定程度上可以提升内存的利用率，减少异常的出现。
 >
 >
 
@@ -182,7 +220,7 @@ https://spark.apache.org/docs/2.1.0/tuning.html#garbage-collection-tuning
 
 >![image-20220428182406624](Spark学习记录.assets/image-20220428182406624.png)
 >
->- Check if there are too many garbage collections by collecting GC stats. If a full GC is invoked multiple times for before a task completes, it means that there isn’t enough memory available for executing tasks.
+>- Check if there are too many garbage collections by collecting GC stats. If a **full GC is invoked multiple times** for before a task completes, it means that there isn’t enough memory available for executing tasks.
 >- **If there are too many minor collections but not many major GCs,** allocating more memory for Eden would help. You can set the size of the Eden to be an over-estimate of how much memory each task will need. If the size of Eden is determined to be `E`, then you can set the size of the Young generation using the option `-Xmn=4/3*E`. (The scaling up by 4/3 is to account for space used by survivor regions as well.)
 >- In the GC stats that are printed, **if the OldGen is close to being full, reduce the amount of memory used for caching by lowering `spark.memory.fraction`; it is better to cache fewer objects than to slow down task execution.** Alternatively, consider decreasing the size of the Young generation. This means lowering `-Xmn` if you’ve set it as above. If not, try changing the value of the JVM’s `NewRatio` parameter. Many JVMs default this to 2, meaning that the Old generation occupies 2/3 of the heap. It should be large enough such that this fraction exceeds `spark.memory.fraction`.
 >- **Try the G1GC garbage collector with `-XX:+UseG1GC`.** It can improve performance in some situations where garbage collection is a bottleneck. Note that with large executor heap sizes, it may be important to increase the [G1 region size](https://blogs.oracle.com/g1gc/entry/g1_gc_tuning_a_case) with `-XX:G1HeapRegionSize`
@@ -226,7 +264,7 @@ https://spark.apache.org/docs/1.6.3/streaming-programming-guide.html
 
 https://www.jianshu.com/p/bf88d05dd98a
 
->简单来说Spark将所有的依赖分为两类：
+>简单来说 Spark 将所有的依赖分为两类：
 >
 >**系统依赖**
 >由Spark classpath、spark.driver.extraLibraryPath、spark.executor.extraClassPath等定义的依赖。系统依赖指定的jar包最终都是放到了AppClassLoader的classpath里，由AppClassLoader完成加载
@@ -235,7 +273,7 @@ https://www.jianshu.com/p/bf88d05dd98a
 >
 >**MutableURLClassLoader和ChildFirstURLClassLoader**
 >
->Spark 的用户依赖由 **ChildFirstURLClassLoader**和**MutableURLClassLoader** 类加载器进行加载，从而与系统依赖进行隔离。如果spark.executor.userClassPathFirst/spark.driver.userClassPathFirst
+>Spark 的用户依赖由 **ChildFirstURLClassLoader**和**MutableURLClassLoader** 类加载器进行加载，从而与系统依赖进行隔离。如果 spark.executor.userClassPathFirst/spark.driver.userClassPathFirst
 >spark.executor.userClassPathFirst为true，则会使用ChildFirstURLClassLoader，否则使用MutableURLClassLoader。
 
 ## 类加载器和类的命名空间
@@ -250,9 +288,9 @@ https://www.jianshu.com/p/bf88d05dd98a
 >
 >1. 可以确保java核心库的类型安全: 例如所有的JAVA应用都至少会引用java.lang.Object类，也就是说在jvm的运行期间,java.lang.Object类会被加载到java虚拟机中,如果这个过程是由自己定义的java类加载器完成的,那么很有可能在jvm中存在多个版本的java.lang.Object类，也就是说在jvm的运行期间而这些类之间是相互不兼容的(命名空间不同导致的)。
 >
->借助双亲委派机制,java核心类库的加载必须由启动类加载器加载,从而确保java中使用的核心类库的版本统一，他们之间是相互兼容的
+>借助双亲委派机制**,java核心类库的加载必须由启动类加载器加载,从而确保java中使用的核心类库的版本统一，他们之间是相互兼容的**
 >
->2. 可以保证java核心类库加载的类不会被自定义类所替代。
+>2. **可以保证java核心类库加载的类不会被自定义类所替代。**
 >
 >3. 不同类的加载器可以为相同名称的类(binary name)创建额外的命名空间。相同名称的类可以并存与不同命名空间的内存中，不同类加载器加载的类之间是相互不兼容的就相当于在java虚拟机内部创建了一个又一个相互独立并且隔离的的java空间,这类技术在很多框架都得到了使用。
 >
@@ -278,7 +316,7 @@ org.apache.spark.sql.AnalysisException: java.lang.LinkageError: loader constrain
 
 >那是什么原因造成spark程序本地能运行，yarn上就“ NoSuchMethodError”了呢？
 >
->原因是本地的jar包被SPARK_HOME/lib中的jar覆盖。spark程序在提交到yarn时，除了上传用户程序的jar，还会上传SPARK_HOME的lib目录下的所有jar包（参考附录2 )。如果你程序用到的jar与SPARK_HOME/lib下的jar发生冲突，那么默认会优先加载SPARK_HOME/lib下的jar，而不是你程序的jar，所以会发生“ NoSuchMethodError”。
+>原因是本地的jar包被SPARK_HOME/lib中的jar覆盖。spark程序在提交到yarn时，除了上传用户程序的jar，还会上传SPARK_HOME的lib目录下的所有jar包（参考附录2 )。如果你程序用到的 jar与SPARK_HOME/lib下的 jar 发生冲突，那么默认会优先加载SPARK_HOME/lib下的jar，而不是你程序的jar，所以会发生“ NoSuchMethodError”。
 >
 >上面的例子就是因为我程序的jar用的是guava18版本（mvn dependency:tree可查出版本），但是SPARK_HOME/lib下用的是guava14版本。lib下的guava14覆盖了用户的guava18，而guava14中并没有splitToList()方法, 所以报错。
 >
@@ -553,7 +591,7 @@ https://cf.jd.com/display/~songqingluan/spark
 >
 >**DAGScheduler 划分 Stages、创建分布式任务的过程中，会为每一个任务指定本地性级别，本地性级别中会记录该任务有意向的计算节点地址，甚至是 Executor 进程 ID。换句话说，任务自带调度意愿，它通过本地性级别告诉 TaskScheduler 自己更乐意被调度到哪里去。**
 >
->既然计算任务的个人意愿这么强烈，TaskScheduler 作为中间商，肯定要优先满足人家的意愿。这就像一名码农想要租西二旗的房子，但是房产中介 App 推送的结果都是东三环国贸的房子，那么这个中介的匹配算法肯定有问题。
+>既然计算任务的个人意愿这么强烈，**TaskScheduler 作为中间商**，肯定要优先满足人家的意愿。这就像一名码农想要租西二旗的房子，但是房产中介 App 推送的结果都是东三环国贸的房子，那么这个中介的匹配算法肯定有问题。
 >
 >由此可见，**Spark 调度系统的原则是尽可能地让数据呆在原地、保持不动，同时尽可能地把承载计算任务的代码分发到离数据最近的地方，从而最大限度地降低分布式系统中的网络开销。毕竟，分发代码的开销要比分发数据的代价低太多，这也正是“数据不动代码动”这个说法的由来。**
 >
@@ -591,8 +629,8 @@ https://cf.jd.com/display/~songqingluan/spark
 >
 > Execution Memory 和 Storage Memory 之间的抢占规则，一共可以总结为 3 条：
 >
->- 如果对方的内存空间有空闲，双方就都可以抢占；
->- 对于 RDD 缓存任务抢占的执行内存，当执行任务有内存需要时，RDD 缓存任务必须立即归还抢占的内存，涉及的 RDD 缓存数据要么落盘、要么清除；
+>- **如果对方的内存空间有空闲，双方就都可以抢占；**
+>- 对于 RDD 缓存任务抢占的执行内存，当执行任务有内存需要时，**RDD 缓存任务必须立即归还抢占的内存，涉及的 RDD 缓存数据要么落盘、要么清除；**
 >- **对于分布式计算任务抢占的 Storage Memory 内存空间，即便 RDD 缓存任务有收回内存的需要，也要等到任务执行完毕才能释放。**
 
 ## 印象笔记重点复习
@@ -651,6 +689,8 @@ https://blog.csdn.net/lpp_dd/article/details/87968703
 
 ![image-20220405173107761](Spark学习记录.assets/image-20220405173107761.png)
 
+**checkpoint() 为持久化的数据增加了HA 容错保障。**
+
 ![image-20220405173215842](Spark学习记录.assets/image-20220405173215842.png)
 
 ### P84 Spark 性能优化
@@ -708,10 +748,6 @@ Kryo 的使用：
 这篇文章解释得比较清晰；
 
 https://blog.csdn.net/lpp_dd/article/details/87968703   
-
-
-
-
 
 # [Spark DataFrame Repartition and Parquet Partition](https://stackoverflow.com/questions/52521067/spark-dataframe-repartition-and-parquet-partition)
 
@@ -785,7 +821,7 @@ Spark properties mainly can be divided into two kinds: one is related to deploy,
 
 >job是如何划分的？
 >
->一个action会触发一个job，多个action时会每运行完一个action在接着往下执行。
+>**一个action会触发一个job，多个action时会每运行完一个action在接着往下执行。**
 >
 >## 参数引入
 >
@@ -833,7 +869,7 @@ Spark properties mainly can be divided into two kinds: one is related to deploy,
 
 ![在这里插入图片描述](https://img-blog.csdnimg.cn/20190801232954830.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L3FxXzM1NDk1MzM5,size_16,color_FFFFFF,t_70)
 
-SparkSession实质上是SQLContext和HiveContext的组合（未来可能还会加上StreamingContext），所以在SQLContext和HiveContext上可用的API在SparkSession上同样是可以使用的。SparkSession内部封装了sparkContext，所以计算实际上是由sparkContext完成的。
+SparkSession 实质上是SQLContext和HiveContext的组合（未来可能还会加上StreamingContext），所以在SQLContext和HiveContext上可用的API在SparkSession上同样是可以使用的。SparkSession内部封装了sparkContext，所以计算实际上是由sparkContext完成的。
 
 # Spark 启动的几种模式
 
@@ -885,13 +921,13 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 
 >#### Performance Impact
 >
->The **Shuffle** is an expensive operation since it involves disk I/O, data serialization, and network I/O. To organize data for the shuffle, Spark generates sets of tasks - *map* tasks to organize the data, and a set of *reduce* tasks to aggregate it. This nomenclature comes from MapReduce and does not directly relate to Spark’s `map` and `reduce` operations.
+>The **Shuffle** is an expensive operation since it involves **disk I/O, data serialization, and network I/O.** To organize data for the shuffle, Spark generates sets of tasks - *map* tasks to organize the data, and a set of *reduce* tasks to aggregate it. This nomenclature comes from MapReduce and does not directly relate to Spark’s `map` and `reduce` operations.
 >
 >Internally, results from individual map tasks are kept in memory until they can’t fit. Then, these are sorted based on the target partition and written to a single file. On the reduce side, tasks read the relevant sorted blocks.
 >
->Certain shuffle operations can consume significant amounts of heap memory since they employ in-memory data structures to organize records before or after transferring them. Specifically, `reduceByKey` and `aggregateByKey` create these structures on the map side, and `'ByKey` operations generate these on the reduce side. When data does not fit in memory Spark will spill these tables to disk, incurring the additional overhead of disk I/O and increased garbage collection.
+>**Certain shuffle operations can consume significant amounts of heap memory** since they employ in-memory data structures to organize records before or after transferring them. Specifically, `reduceByKey` and `aggregateByKey` create these structures on the map side, and `'ByKey` operations generate these on the reduce side. When data does not fit in memory Spark will spill these tables to disk, incurring the additional overhead of disk I/O and increased garbage collection.
 >
->Shuffle also generates a large number of intermediate files on disk. As of Spark 1.3, these files are preserved until the corresponding RDDs are no longer used and are garbage collected. This is done so the shuffle files don’t need to be re-created if the lineage is re-computed. Garbage collection may happen only after a long period of time, if the application retains references to these RDDs or if GC does not kick in frequently. This means that long-running Spark jobs may consume a large amount of disk space. The temporary storage directory is specified by the `spark.local.dir` configuration parameter when configuring the Spark context.
+>**Shuffle also generates a large number of intermediate files on disk.** As of Spark 1.3, these files are preserved until the corresponding RDDs are no longer used and are garbage collected. This is done so the shuffle files don’t need to be re-created if the lineage is re-computed. Garbage collection may happen only after a long period of time, if the application retains references to these RDDs or if GC does not kick in frequently. This means that long-running Spark jobs may consume a large amount of disk space. The temporary storage directory is specified by the `spark.local.dir` configuration parameter when configuring the Spark context.
 >
 >Shuffle behavior can be tuned by adjusting a variety of configuration parameters. See the ‘Shuffle Behavior’ section within the [Spark Configuration Guide](https://spark.apache.org/docs/2.4.7/configuration.html).
 >
@@ -971,7 +1007,7 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 >
 > **ORC和Parquet在大多数情况下非常相似；本质区别是Parquet针对Spark进行了优化，而ORC则是针对Hive进行了优化**。
 >
-> Spark不能把它的所有函数API转换为SQL数据库中的函数，因此**有时要用****SQL****作为DataFrame****返回**。这可能看起来有点复杂但实际上很简单，只需要指定SQL查询而非指定表名，将查询语句包含在圆括号内，然后对其重命名。下面例子将其重命名为同一表名flight_info：
+> Spark 不能把它的所有函数API转换为SQL数据库中的函数，因此**有时要用SQL作为DataFrame返回**。这可能看起来有点复杂但实际上很简单，只需要指定SQL查询而非指定表名，将查询语句包含在圆括号内，然后对其重命名。下面例子将其重命名为同一表名flight_info：
 >
 > ```Scala
 > val pushdownQuery = """(SELECT DISTINCT(DEST_COUNTRY_NAME) FROM flight_info) AS flight_info"""
@@ -1099,7 +1135,7 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 >先介绍下**宽依赖（发生shuffle）**和**窄依赖（不发生shuffle）**
 >
 >- 窄依赖：父Rdd的分区最多只能被一个子Rdd的分区所引用，即一个父Rdd的分区对应一个子Rdd的分区，或者多个父Rdd的分区对应一个子Rdd的分区。即**一对一**或**多对一**，如下图左边所示。
->- 宽依赖：RDD的分区依赖于父RDD的多个分区或所有分区，即存在一个父RDD的一个分区对应一个子RDD的多个分区。1个父RDD分区对应多个子RDD分区，这其中又分两种情况：1个父RDD对应所有子RDD分区（未经协同划分的Join）或者1个父RDD对应非全部的多个RDD分区（如groupByKey）。即**一对多**
+>- 宽依赖：RDD的分区依赖于父RDD的多个分区或所有分区，即存在一个父RDD的一个分区对应一个子RDD的多个分区。1个父RDD分区对应多个子RDD分区，这其中又分两种情况：**1个父RDD对应所有子RDD分区（未经协同划分的Join）或者1个父RDD对应非全部的多个RDD分区（如groupByKey）。即一对多**
 
 # [Kafka+Spark Streaming如何保证exactly once语义](https://www.jianshu.com/p/10de8f3b1be8)
 
@@ -1149,7 +1185,7 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 
 >## 推测执行
 >
->在Spark中任务会以DAG图的方式并行执行，每个节点都会并行的运行在不同的executor中，但是有的任务可能执行很快，有的任务执行很慢，比如**网络抖动、性能不同、数据倾斜**等等。有的Task很慢就会成为整个任务的瓶颈，此时可以触发 推测执行 (speculative) 功能，为长时间的task重新启动一个task，哪个先完成就使用哪个的结果，并Kill掉另一个task。
+>在Spark中任务会以DAG图的方式并行执行，每个节点都会并行的运行在不同的executor中，但是有的任务可能执行很快，有的任务执行很慢，比如**网络抖动、性能不同、数据倾斜**等等。有的Task很慢就会成为整个任务的瓶颈，此时可以触发 推测执行 (speculative) 功能，**为长时间的task重新启动一个task，哪个先完成就使用哪个的结果，并Kill掉另一个task。**
 >
 >```text
 ># 开启speculative，默认关闭
@@ -1162,13 +1198,13 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 >spark.speculation.multiplier=1.5
 >```
 
-## [SparkSQL InternalRow](https://blog.csdn.net/qq_41775852/article/details/111287973)   
+## [SparkSQL InternalRow](https://blog.csdn.net/qq_41775852/article/details/111287973)   （重要）
 
 这篇文章能 弥补 SparkSQL 内核剖析 这本书中对 InternalRow 介绍的不足缺陷。
 
 自己对这块源码也需要看看。
 
->**SparkSQL在执行物理计划操作RDD时，会全部使用RDD<InternalRow>类型进行操作。**
+>**SparkSQL 在执行物理计划操作RDD时，会全部使用RDD<InternalRow>类型进行操作。**
 >
 >lnternalRow 体系
 >在SparkSQL 内部实现中， InternalRow 就是用来表示一行行数据的类，物理算子树节点产生和转换的RDD 类即为RDD [InternalRow］ 。此外， InternalRow 中的每一列都是Catalyst 内部定义的数据类型。
@@ -1212,19 +1248,19 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 >**所以ShuffleExchangeExec在序列化时，shuffle write将UnsafseRow序列化为二进制字节数组写入本地文件，shuffle read再将二进制字节数组反序列化为UnsafseRow。由于shuffle时只需要传输对象数据，而对象早已被序列化存入了UnsafseRow，所以UnsafeRowSerializer只需要将UnsafseRow内部对象的序列化字节数组写出或者读取即可，节省了序列化和反序列化的消耗。**
 >
 >Transform RDD[InternalRow]
->SparkSQL的Transform操作有两种类型，一种为强类型化转换算子，另一种为利用内置的schmea隐式转换算子。
+>SparkSQL的Transform操作有两种类型，**一种为强类型化转换算子，另一种为利用内置的schmea隐式转换算子。**
 >
->强类型化转换算子：filter(func : scala.Function1[T, scala.Boolean])，map[](func : scala.Function1[T, U])，需要明确申明操作的数据类型，并且传入对象的Encoder。
+>**强类型化转换算子**：filter(func : scala.Function1[T, scala.Boolean])，map[](func : scala.Function1[T, U])，需要明确申明操作的数据类型，并且传入对象的Encoder。
 >
->利用内置的schema隐式转换算子：filter(conditionExpr : root.scala.Predef.String)，select(col: String, cols: String*)，不需要说明操作数据类型，直接利用内置的schmea操作数据列。
+>**利用内置的schema隐式转换算子**：filter(conditionExpr : root.scala.Predef.String)，select(col: String, cols: String*)，不需要说明操作数据类型，直接利用内置的schmea操作数据列。
 >
 >### 强类型化转换算子
 >
->**对于强类型化转换算子**，比如map操作，DataSet源码中：
+>**对于强类型化转换算子**，比如map操作，DataSet 源码中：
 >
->可以看到map操作会MapElements逻辑算子的上下接上DeserializeToObject和SerializeFromObject逻辑算子，最终会转换为DeserializeToObjectExec和SerializeFromObjectExec物理算子，其利用Encoder对UnsafeRow进行序列化和反序列化。
+>**可以看到map操作会MapElements逻辑算子的上下接上DeserializeToObject和SerializeFromObject逻辑算子，最终会转换为 DeserializeToObjectExec 和 SerializeFromObjectExec 物理算子，其利用Encoder对UnsafeRow进行序列化和反序列化。**
 >
->DeserializeToObjectExec 先将 UnsafeRow中的字节数组反序列化为JAVA对象储存在GenericInternalRow 中，MapElement 再对 GenericInternalRow 中的对象进行 map 操作，然后SerializeFromObjectExec 再将 GenericInternalRow 中的 JAVA 对象序列化字节数组储存在UnsafeRow中。
+>**DeserializeToObjectExec 先将 UnsafeRow中的字节数组反序列化为JAVA对象储存在GenericInternalRow 中，MapElement 再对 GenericInternalRow 中的对象进行 map 操作，然后SerializeFromObjectExec 再将 GenericInternalRow 中的 JAVA 对象序列化字节数组储存在UnsafeRow中。**
 >
 >### 利用内置的schmea隐式转换算子
 >
@@ -1283,23 +1319,19 @@ https://spark.apache.org/docs/2.4.7/rdd-programming-guide.html
 
 ## Tungsten 钨丝计划
 
->```
 >为什么DataFrame比RDD在存储和计算上的效率更高呢?
->    这主要得益于Tungsten项目,Tungsten 做的优化概括起来说就是由Spark自己来管理内存而不是使用JVM,这样可以避免JVM GC带来的性能损失;
->    内存中的Java对象呗存储成Spark自己的二进制格式,更加紧凑,节省内存空间,而且能更好的估计数据量大小和内存使用情况;
+>这主要得益于Tungsten项目,Tungsten 做的优化概括起来说就是由Spark自己来管理内存而不是使用JVM,这样可以避免JVM GC带来的性能损失;
+>    内存中的Java对象存储成Spark自己的二进制格式,更加紧凑,节省内存空间,而且能更好的估计数据量大小和内存使用情况;
 >    计算直接发生在二进制格式上,省去了序列化和反序列化时间
->what: 像传统的Hadoop/Hive系统,磁盘IO是一个很大的瓶颈,而对于像Spark这样的计算框架,主要的瓶颈在于CPU和内存,Tungsten主要做了哪些优化?
->    1. 基于JVM的语言带来得到问题:GC问题和Java对象的内存开销.例如一个字符串"abcd" 理论上只有4个bytes,但是用Java String 类型来存储却需要48个bytes.Spark的改进就是自己管理内存,不适用JVM来管理了,使用的工具是sun.misc.Unsage. DataFrame的每一行就是一个UnsafeRow.这块内存存的啥东西只有Spark自己能读懂,有了这种特有的二进制存储格式后,DataFrame的算则直接控制二进制数据,同时又省去了很多序列化和反序列化的
->开销.
->    2. Cache-aware的计算. 现在Spark已经是内存计算引擎了,但是能不能更进一步呢?能不能更好的利用CPU的L1/L2/L3缓存的优势呢? 因为CPU的访问访问效率更高.这个优化点也不是意淫出来的,是在Profile了很多Spark应用之后得到的结论,发现很多CPu的时间浪费在等待从内存中取数据的过程.所以Tungsten中就设计和实现了一些列的cache-friendly 的算法和数据结构来加速这个过程,例如aggregations.joins 和 shuffle操作中进行快速排序和hash操作.以sort 为例 Spark已经实现了cache-aware的sort算法,比原来的性能提升至少有3倍.在传统的排序中是通过指针来索引数据的，但是缺点就是CPU cache 命中率不够高，因为我们需要随机访问 record 做比较。实际上 quicksort 算法是能够非常好的利用 cache 的，主要是我们的 record 不是连续存储的。Spark 的优化就是存储一个 key prefix 和指针在一起，那么就可以通过比较 key prefix 来直接实现排序，这样 CPU cache的命中率就会高很多。例如如果我们需要排序的列是一个 string 类型，那么我们可以拿这个 string 的 UTF-8 编码的前 8 个字节来做 key prefix，并进行排序。
+>    what: 像传统的Hadoop/Hive系统,磁盘IO是一个很大的瓶颈,而对于像Spark这样的计算框架,主要的瓶颈在于CPU和内存,Tungsten主要做了哪些优化?
+>
+>       1. 基于JVM 的语言带来得到问题: **GC问题和Java对象的内存开销**.例如一个字符串"abcd" 理论上只有4个bytes,但是用Java String 类型来存储却需要48个bytes. **Spark 的改进就是自己管理内存,不适用JVM来管理了,使用的工具是sun.misc. Unsage.**  **DataFrame的每一行就是一个UnsafeRow.**这块内存存的啥东西只有Spark自己能读懂,有了这种特有的二进制存储格式后,DataFrame的算则直接控制二进制数据,同时又省去了很多序列化和反序列化的开销.
+>   2. **Cache-aware的计算.** 现在Spark已经是内存计算引擎了,但是能不能更进一步呢?能不能更好的利用CPU的L1/L2/L3缓存的优势呢? 因为 CPU 的访问访问效率更高. 这个优化点也不是意淫出来的,是在Profile了很多Spark应用之后得到的结论,发现很多CPU的时间浪费在等待从内存中取数据的过程.所以**Tungsten中就设计和实现了一些列的cache-friendly 的算法和数据结构来加速这个过程**,例如aggregations.joins 和 shuffle操作中进行快速排序和hash操作.以sort 为例 Spark已经实现了cache-aware的sort算法,比原来的性能提升至少有3倍. **在传统的排序中是通过指针来索引数据的，但是缺点就是CPU cache 命中率不够高，因为我们需要随机访问 record 做比较。实际上 quicksort 算法是能够非常好的利用 cache 的，主要是我们的 record 不是连续存储的。Spark 的优化就是存储一个 key prefix 和指针在一起，那么就可以通过比较 key prefix 来直接实现排序，这样 CPU cache的命中率就会高很多。** 例如如果我们需要排序的列是一个 string 类型，那么我们可以拿这个 string 的 UTF-8 编码的前 8 个字节来做 key prefix，并进行排序。
 >    3. 运行时代码生成
->    运行时代码生成能免去昂贵的虚函数调用,同时也省去了对Java基本类型装箱之类的操作了.
->    Spark Sql 将运行时代码生成用于表达式的求职,效果显著.
->```
->
->
+>       运行时代码生成能免去昂贵的虚函数调用,同时也省去了对Java基本类型装箱之类的操作了.
+>       Spark Sql 将运行时代码生成用于表达式的求值,效果显著.
 
-## ShuffleReader的实现原理
+## ShuffleReader 的实现原理
 
 https://zhuanlan.zhihu.com/p/282701083
 
@@ -1311,7 +1343,7 @@ https://zhuanlan.zhihu.com/p/282701083
 >
 >### **read函数**
 >
->该函数实现了Shuffle过程数据读取的功能，执行步骤如下：
+>该函数实现了Shuffle 过程数据读取的功能，执行步骤如下：
 >
 >1）创建一个能够获取多个数据块的迭代器：ShuffleBlockFetcherIterator对象，它可以从本地或远端获取数据块，本地数据块通过**BlockManager对象进行获取；远端数据块通过数据块传输服务：BlockTransferService服务来获取**。该迭代器返回(BlockID, InputStream)元组。
 >
@@ -1329,7 +1361,7 @@ https://zhuanlan.zhihu.com/p/282701083
 >
 >### **ShuffleReader的实现要点总结**
 >
->- Shuffle过程可以从两个地方来读取数据块：**一个是本地的block，一个是远程的block。**
+>- Shuffle 过程可以从两个地方来读取数据块：**一个是本地的block，一个是远程的block。**
 >- **远程的block读取是通过向BlockTransferService这个服务发送读取数据块请求来获取数据数据。**
 >- 那么如何区分是从本地读，还是从远程读取呢？**是通过每个块的executorID来区分的，本地环境的executorID和块的id相等就是从本地读，若不相等就会从远端节点读取数据。**
 >- **shuffle reader读取数据过程被封装在一个迭代器类：ShuffleBlockFetcherIterator中**。
@@ -1344,16 +1376,16 @@ https://zhuanlan.zhihu.com/p/282701083
 >
 >![image-20220428182406624](Spark学习记录.assets/image-20220428182406624.png)
 >
->1. 执行内存 (Execution Memory) : 主要用于存放 Shuffle、Join、Sort、Aggregation 等**计算过程中的临时数据；**
->2. 存储内存 (Storage Memory) : 主要用于存储 **spark 的 cache 数据，例如RDD的缓存、unroll数据；**
->3. 用户内存（User Memory）: 主要用于存储 **RDD 转换操作所需要的数据**，例如 RDD 依赖等信息；
->4. 预留内存（Reserved Memory）: **系统预留内存**，会用来存储Spark内部对象。
+>1. **执行内存 (Execution Memory)** : 主要用于存放 **Shuffle、Join、Sort、Aggregation 等计算过程中的临时数据；**
+>2. **存储内存 (Storage Memory)** : 主要用于存储 **spark 的 cache 数据，例如RDD的缓存、unroll数据；**
+>3. **用户内存（User Memory）**: 主要用于存储 **RDD 转换操作所需要的数据**，例如 RDD 依赖等信息；
+>4. **预留内存（Reserved Memory）**: **系统预留内存**，会用来存储Spark内部对象。
 >
 >### 堆外内存 (Off-heap Memory)
 >
->Spark 1.6 开始引入了 Off-heap memory (详见SPARK-11389)。这种模式不在 JVM 内申请内存，而是调用 Java 的 unsafe 相关 API 进行诸如 C 语言里面的 `malloc()` 直接向操作系统申请内存。这种方式下 Spark 可以直接操作系统堆外内存，减少了不必要的内存开销，以及频繁的 GC 扫描和回收，提升了处理性能。另外，堆外内存可以被精确地申请和释放，而且序列化的数据占用的空间可以被精确计算，所以相比堆内内存来说降低了管理的难度，也降低了误差。，缺点是必须自己编写内存申请和释放的逻辑。
+>Spark 1.6 开始引入了 Off-heap memory (详见SPARK-11389)。这种模式不在 JVM 内申请内存，而是调用 Java 的 unsafe 相关 API 进行诸如 C 语言里面的 `malloc()` 直接向操作系统申请内存。这种方式下 Spark 可以直接操作系统堆外内存，**减少了不必要的内存开销，以及频繁的 GC 扫描和回收，提升了处理性能。**另外，堆外内存可以被精确地申请和释放，而且序列化的数据占用的空间可以被精确计算，所以相比堆内内存来说降低了管理的难度，也降低了误差。缺点是必须自己编写内存申请和释放的逻辑。
 >
->默认情况下`Off-heap`模式的内存并不启用，我们可以通过 `spark.memory.offHeap.enabled` 参数开启，并由 `spark.memory.offHeap.size` 指定堆外内存的大小，单位是字节（占用的空间划归 JVM OffHeap 内存）。
+>**默认情况下`Off-heap`模式的内存并不启用，我们可以通过 `spark.memory.offHeap.enabled` 参数开启，并由 `spark.memory.offHeap.size` 指定堆外内存的大小，单位是字节（占用的空间划归 JVM OffHeap 内存）。**
 >
 >![image-20220428183909584](Spark学习记录.assets/image-20220428183909584.png)
 >
@@ -1369,14 +1401,14 @@ https://zhuanlan.zhihu.com/p/282701083
 >
 >### 任务内存管理（Task Memory Manager）
 >
->每个 Executor 中可同时运行的任务数由 Executor 分配的 CPU 的核数 N 和每个任务需要的 CPU 核心数 C 决定。其中:
+>**每个 Executor 中可同时运行的任务数由 Executor 分配的 CPU 的核数 N 和每个任务需要的 CPU 核心数 C 决定。**其中:
 >
 >```text
 >N = spark.executor.cores
 >C = spark.task.cpus
 >```
 >
->由此每个 Executor 的最大任务并行度可表示为 : `TP = N / C` 。
+>**由此每个 Executor 的最大任务并行度可表示为 : `TP = N / C` 。**
 >
 >其中，C 值与应用类型有关，大部分应用使用默认值 1 即可，因此，影响 Executor 中最大任务并行度（最大活跃task数）的主要因素是 N。
 >
@@ -1412,11 +1444,11 @@ https://zhuanlan.zhihu.com/p/282701083
 >
 >![image-20220428205111768](Spark学习记录.assets/image-20220428205111768.png)
 >
->### Executor内存参数调优
+>### Executor 内存参数调优
 >
 >#### 1. Executor JVM Used Memory Heuristic
 >
->现象：配置的executor内存比实际使用的JVM最大使用内存还要大很多。
+>现象：配置的 executor 内存比实际使用的JVM最大使用内存还要大很多。
 >
 >原因：这意味着 executor 内存申请过多了，实际上并不需要使用这么多内存。
 >
@@ -1498,18 +1530,38 @@ https://zhuanlan.zhihu.com/p/282701083
 
 ## [Spark调优 | 不可避免的 Join 优化](https://jishuin.proginn.com/p/763bfbd5a8ff)
 
->spark提供了三种join实现：**sort merge join、broadcast hash join以及hash join。**
+>spark 提供了三种 join 实现：**sort merge join、broadcast hash join以及hash join。**
 >
+>## **sort merge join实现**
 >
+>要让两条记录能join到一起，首先需要将具有相同key的记录在同一个分区，所以通常来说，需要做一次shuffle，map阶段根据join条件确定每条记录的key，基于该key做shuffle write，将可能join到一起的记录分到同一个分区中，这样在shuffle read阶段就可以将两个表中具有相同key的记录拉到同一个分区处理。前面我们也提到，对于buildIter一定要是查找性能较优的数据结构，通常我们能想到hash表，但是对于一张较大的表来说，不可能将所有记录全部放到hash表中，另外也可以对buildIter先排序，查找时按顺序查找，查找代价也是可以接受的，我们知道，spark shuffle阶段天然就支持排序，这个是非常好实现的，下面是sort merge join示意图。
+>
+>![img](Spark学习记录.assets/a48959d7200e543ecb9db16af49f8f46.webp)
+>
+>在shuffle read阶段，分别对streamIter和buildIter进行merge sort，在遍历streamIter时，对于每条记录，都采用顺序查找的方式从buildIter查找对应的记录，由于两个表都是排序的，**每次处理完streamIter的一条记录后，对于streamIter的下一条记录，只需从buildIter中上一次查找结束的位置开始查找，所以说每次在buildIter中查找不必重头开始，整体上来说，查找性能还是较优的。**
+>
+>## **broadcast join实现**
+>
+>为了能具有相同key的记录分到同一个分区，我们通常是做shuffle，那么如果buildIter是一个非常小的表，那么其实就没有必要大动干戈做shuffle了，直接将buildIter广播到每个计算节点，然后将buildIter放到hash表中，如下图所示。
+>
+>![img](Spark学习记录.assets/b1302d7e2660fcd3e949c36e95d84f54.webp)
+>
+>从上图可以看到，不用做shuffle，可以直接在一个map中完成，通常这种join也称之为map join。那么问题来了，什么时候会用broadcast join实现呢？这个不用我们担心，spark sql自动帮我们完成，当buildIter的估计大小不超过参数**spark.sql.autoBroadcastJoinThreshold设定的值(默认10M)，那么就会自动采用broadcast join，否则采用sort merge join。**
+>
+>## **hash join实现**
+>
+>除了上面两种join实现方式外，spark还提供了hash join实现方式，在shuffle read阶段不对记录排序，反正来自两格表的具有相同key的记录会在同一个分区，只是在分区内不排序，将来自buildIter的记录放到hash表中，以便查找，如下图所示。
+>
+>![img](Spark学习记录.assets/b1302d7e2660fcd3e949c36e95d84f54-20230326164302335.webp)
 >
 >不难发现，要将来自buildIter的记录放到hash表中，那么每个分区来自buildIter的记录不能太大，否则就存不下，默认情况下hash join的实现是关闭状态，如果要使用hash join，必须满足以下四个条件：
 >
->- buildIter总体估计大小超过spark.sql.autoBroadcastJoinThreshold设定的值，即不满足broadcast join条件；
->- 开启尝试使用hash join的开关，spark.sql.join.preferSortMergeJoin=false；
+>- **buildIter总体估计大小超过spark.sql.autoBroadcastJoinThreshold设定的值，即不满足broadcast join条件；**
+>- **开启尝试使用hash join的开关，spark.sql.join.preferSortMergeJoin=false；**
 >- 每个分区的平均大小不超过spark.sql.autoBroadcastJoinThreshold设定的值，即shuffle read阶段每个分区来自buildIter的记录要能放到内存中；
->- streamIter的大小是buildIter三倍以上；
+>- streamIter 的大小是 buildIter 三倍以上；
 >
->所以说，使用hash join的条件其实是很苛刻的，在大多数实际场景中，即使能使用hash join，但是使用sort merge join也不会比hash join差很多，所以尽量不要使用hash。
+>所以说，使用hash join的条件其实是很苛刻的，在大多数实际场景中，**即使能使用hash join，但是使用sort merge join也不会比hash join差很多，所以尽量不要使用hash。**
 
 ## [Spark离线计算优化——leftOuterJoin优化](https://blog.csdn.net/zx_blog/article/details/80599537)
 
@@ -1517,7 +1569,7 @@ https://zhuanlan.zhihu.com/p/282701083
 >
 >可以通过两种方式进行优化：
 >
->1、leftOuterJoin操作前，两个RDD自身进行reduceByKey操作（保证key唯一）；
+>1、leftOuterJoin 操作前，两个RDD自身进行reduceByKey操作（保证key唯一）；
 >
 >2、两个RDD先map成结果k-v格式，再将两个RDD进行reduceByKey操作（避免使用leftOuterJoin操作），示例：
 >
@@ -1531,7 +1583,7 @@ https://zhuanlan.zhihu.com/p/282701083
 >
 >除了reduceByKey，其实也可以用groupByKey代替leftOuterJoin，但是groupByKey处理结果无法控制value顺序，性能也不如reduceByKey操作。
 >
->总结：leftOuterJoin操作都需要进行方式1的优化，保证key唯一；如果leftOuterJoin操作本身消耗时间不长，直接使用leftOuterJoin即可（leftOuterJoin操作耗时  < 两次map+reduceByKey操作耗时），如果时间较长则选择方式2进行优化。
+>总结：leftOuterJoin 操作都需要进行方式1的优化，保证key唯一；如果leftOuterJoin操作本身消耗时间不长，直接使用leftOuterJoin即可（leftOuterJoin操作耗时  < 两次map+reduceByKey操作耗时），如果时间较长则选择方式2进行优化。
 >
 
 ## [Spark---算子调优之MapPartitions提升Map类操作性能](https://blog.csdn.net/tian_qing_lei/article/details/77940504)
@@ -1545,13 +1597,13 @@ https://zhuanlan.zhihu.com/p/282701083
 >
 >2、MapPartitions的缺点：
 >
->如果是普通的map操作，一次function的执行就处理一条数据；那么如果内存不够用的情况下，比如处理了1千条数据了，那么这个时候内存不够了，那么就可以将已经处理完的1千条数据从内存里面垃圾回收掉，或者用其他方法，腾出空间来吧。
->所以说普通的map操作通常不会导致内存的OOM异常。
->但是MapPartitions操作，对于大量数据来说，比如甚至一个partition，100万数据，一次传入一个function以后，那么可能一下子内存不够，但是又没有办法去腾出内存空间来，可能就OOM，内存溢出。
+>**如果是普通的map操作，一次function的执行就处理一条数据；那么如果内存不够用的情况下，比如处理了1千条数据了，那么这个时候内存不够了，那么就可以将已经处理完的1千条数据从内存里面垃圾回收掉，或者用其他方法，腾出空间来吧。**
+>**所以说普通的map操作通常不会导致内存的OOM异常。**
+>**但是MapPartitions操作，对于大量数据来说，比如甚至一个partition，100万数据，一次传入一个function以后，那么可能一下子内存不够，但是又没有办法去腾出内存空间来，可能就OOM，内存溢出。**
 >
 >3、什么时候比较适合用MapPartitions系列操作
 >
->就是说，数据量不是特别大的时候，都可以用这种MapPartitions系列操作，性能还是非常不错的，是有提升的。比如原来是15分钟，（曾经有一次性能调优），12分钟。10分钟->9分钟。
+>就是说，**数据量不是特别大的时候，都可以用这种MapPartitions系列操作，性能还是非常不错的，是有提升的。**比如原来是15分钟，（曾经有一次性能调优），12分钟。10分钟->9分钟。
 >但是也有过出问题的经验，MapPartitions 只要一用，直接OOM，内存溢出，崩溃。
 >在项目中，自己先去估算一下RDD的数据量，以及每个partition的量，还有自己分配给每个executor的内存资源。看看一下子内存容纳所有的partition数据，行不行。如果行，可以试一下，能跑通就好。性能肯定是有提升的。
 >但是试了一下以后，发现，不行，OOM了，那就放弃吧。
@@ -1627,21 +1679,9 @@ https://zhuanlan.zhihu.com/p/282701083
 >
 >```java
 >String tableName ="pic_test2";
->
->
->
 >conf.set(TableInputFormat.INPUT_TABLE,tableName);
->
->
->
 >conf.set(TableInputFormat.SCAN,convertScanToString(scan));
->
->
->
 >JavaPairRDD hBaseRDD = sc.newAPIHadoopRDD(conf,TableInputFormat.class,ImmutableBytesWritable.class,Result.class);
->
->
->
 >Hbase Table:pic_test2的region为10，则hBaseRDD的分区数也为10。
 >```
 >
@@ -1649,29 +1689,26 @@ https://zhuanlan.zhihu.com/p/282701083
 >
 >```java
 >Dataset<Row> df = spark.read().json("examples/src/main/resources/people.json");
->
->
->
 >people.json大小为300M，在HDFS中占用了2个blocks，则该DataFrame df分区数为2。
 >```
 >
 >**5、Spark Streaming获取Kafka消息对应的分区数**
 >
->  a、基于Receiver接收数据
+> a、基于Receiver接收数据
 >
-> > 在Receiver的方式中，Spark中的partition和kafka中的partition并不是相关的，所以如果我们加大每个topic的partition数量，
->>
+>> 在Receiver的方式中，Spark中的partition和kafka中的partition并不是相关的，所以如果我们加大每个topic的partition数量，
+>
 >> 仅仅是增加线程来处理由单一Receiver消费的主题。但是这并没有增加Spark在处理数据上的并行度。
 >
->  b、基于direct直连方式读取kafka数据
+> b、基于direct直连方式读取kafka数据
 >
-> > Spark会创建跟Kafka partition一样多的RDD partition，并且会并行从Kafka中读取数据。
->>
+>> Spark会创建跟 Kafka partition 一样多的 RDD partition，并且会并行从Kafka中读取数据。
+>
 >> 所以在Kafka partition和RDD partition之间，有一个一对一的映射关系。
 
 ## [Spark分区并行度决定机制](https://zhuanlan.zhihu.com/p/101797149)
 
->**Spark任务在执行时会将job划分为不同的stage，一个stage中task的数量跟最后一个RDD的分区数量相同。之前已经介绍过，stage划分的关键是宽依赖，而宽依赖往往伴随着shuffle操作。**对于一个stage接收另一个stage的输入，**这种(shuffle)操作通常都会有一个参数numPartitions来显示指定分区数**。最典型的就是一些ByKey算子，比如groupByKey(numPartitions: Int)，但是这个分区数需要多次测试来确定合适的值。首先确定父RDD中的分区数（通过rdd.partitions().size()可以确定RDD的分区数），然后在此基础上增加分区数，多次调试直至在确定的资源任务能够平稳、安全的运行。
+>**Spark任务在执行时会将job划分为不同的stage，一个stage中task的数量跟最后一个RDD的分区数量相同。之前已经介绍过，stage划分的关键是宽依赖，而宽依赖往往伴随着shuffle操作。**对于一个stage接收另一个stage的输入，**这种(shuffle)操作通常都会有一个参数numPartitions来显示指定分区数**。最典型的就是一些ByKey算子，比如 groupByKey(numPartitions: Int)，但是这个分区数需要多次测试来确定合适的值。首先确定父RDD中的分区数（通过 rdd.partitions().size() 可以确定 RDD 的分区数），然后在此基础上增加分区数，多次调试直至在确定的资源任务能够平稳、安全的运行。
 >
 >**通常，RDD的分区数与其所依赖的RDD的分区数相同，除非shuffle。**但有几个特殊的算子：
 >
@@ -1693,7 +1730,7 @@ https://zhuanlan.zhihu.com/p/282701083
 >
 >2.union算子
 >
->通过分析源码，RDD在调用union算子时，最终生成的RDD分区数分两种情况：1）union的RDD分区器已定义并且它们的分区器相同
+>通过分析源码，RDD在调用union算子时，最终生成的RDD分区数分两种情况：1）union的RDD分区器已定义并且它们的分区器相同。
 >
 >多个父RDD具有相同的分区器，union后产生的RDD的分区器与父RDD相同且分区数也相同。比如，n个RDD的分区器相同且是defined，分区数是m个。那么这n个RDD最终union生成的一个RDD的分区数仍是m，分区器也是相同的
 >
@@ -1753,7 +1790,7 @@ https://zhuanlan.zhihu.com/p/282701083
 >
 >**2.1 checkpoints**
 >
->Spark Streaming的checkpoints是最基本的存储状态信息的方式，一般是保存在HDFS中。但是最大的问题是如果streaming程序升级的话，checkpoints的数据无法使用，所以几乎没人使用。
+>Spark Streaming 的 checkpoints是最基本的存储状态信息的方式，一般是保存在HDFS中。但是最大的问题是如果streaming程序升级的话，checkpoints的数据无法使用，所以几乎没人使用。
 >
 >**2.2 Zookeeper**
 >
@@ -1771,14 +1808,14 @@ https://zhuanlan.zhihu.com/p/282701083
 
 >![image-20210226165208072](./Spark学习记录.assets/image-20210226165208072.png)
 >
->上面的图描述通常的Spark Streaming应用管理offset流程。Offsets可以通过多种方式来管理，但是一般来说遵循下面的步骤:
+>上面的图描述通常的 Spark Streaming 应用管理offset流程。Offsets 可以通过多种方式来管理，但是一般来说遵循下面的步骤: 
 >
 >- 在 Direct DStream初始化的时候，需要指定一个包含每个topic的每个分区的offset用于让Direct DStream从指定位置读取数据。
 >  - offsets就是步骤4中所保存的offsets位置
 >- 读取并处理消息
 >- 处理完之后存储结果数据
 >  - 用虚线圈*存储和提交offset*只是简单强调用户可能会执行一系列操作来满足他们更加严格的语义要求。这包括幂等操作和通过原子操作的方式存储offset。
->- 最后，将offsets保存在外部持久化数据库如 HBase, Kafka, HDFS, and ZooKeeper中
+>- 最后，**将offsets保存在外部持久化数据库如 HBase, Kafka, HDFS, and ZooKeeper中**
 >
 >**为了更好地理解这一章节中提到的内容，我们先来做一些铺垫。如果是使用spark-streaming-kafka-0-10，那么我们建议将`enable.auto.commit`设为false。这个配置只是在这个版本生效，`enable.auto.commit`如果设为true的话，那么意味着 offsets会按照`auto.commit.interval.ms`中所配置的间隔来周期性自动提交到Kafka中。在Spark Streaming中，将这个选项设置为true的话会使得Spark应用从kafka中读取数据之后就自动提交，而不是数据处理之后提交，这不是我们想要的。所以为了更好地控制offsets的提交，我们建议将`enable.auto.commit`设为false。**
 >
@@ -1846,13 +1883,15 @@ https://zhuanlan.zhihu.com/p/282701083
 >
 >而对于 **Shuffle Read， 首先可能需要通过网络从各个 Write 任务节点获取给定分区的数据，即数据文件中某一段连续的区域，然后经过排序，归并等过程，最终形成计算结果。**
 >
+>![image-20230326182408266](Spark学习记录.assets/image-20230326182408266.png)
+>
 >对于 Shuffle Write，Spark 当前有三种实现，具体分别为 **BypassMergeSortShuffleWriter, UnsafeShuffleWriter 和 SortShuffleWriter** （具体使用哪一个实现有一个判断条件，此处不表）。而 Shuffle Read 只有一种实现。
 >
 >## 2.1 Shuffle Write 阶段分析
 >
 >### 2.1.1 BypassMergeSortShuffleWriter 分析
 >
->对于 BypassMergeSortShuffleWriter 的实现，大体实现过程是**首先为每个分区创建一个临时分区文件，数据写入对应的分区文件，最终所有的分区文件合并成一个数据文件，并且产生一个索引文件。**由于这个过程不做排序，combine（如果需要 combine 不会使用这个实现）等操作，因此对于 BypassMergeSortShuffleWriter，总体来说是不怎么耗费内存的。
+>对于 BypassMergeSortShuffleWriter 的实现，大体实现过程是**首先为每个分区创建一个临时分区文件，数据写入对应的分区文件，最终所有的分区文件合并成一个数据文件，并且产生一个索引文件。**由于这个过程不做排序，combine（如果需要 combine 不会使用这个实现）等操作，因此**对于 BypassMergeSortShuffleWriter，总体来说是不怎么耗费内存的。**
 >
 >### 2.1.2 SortShuffleWriter 分析
 >
@@ -1882,7 +1921,7 @@ https://zhuanlan.zhihu.com/p/282701083
 >
 >## 2.2 Shuffle Read 阶段分析
 >
->Spark Shuffle Read 主要经历从**获取数据，序列化流，添加指标统计，可能的聚合 （Aggregation) 计算以及排序等过程。**大体流程如下图。（notice: shuffle 时获取数据是 reduceTask 主动获取的）
+>Spark Shuffle Read 主要经历从**获取数据，序列化流，添加指标统计，可能的聚合 （Aggregation) 计算以及排序等过程。**大体流程如下图。**（notice: shuffle 时获取数据是 reduceTask 主动获取的）**
 >
 >![image-20220530004110413](Spark学习记录.assets/image-20220530004110413.png)
 >
@@ -2188,20 +2227,20 @@ Dataset 是结构化 API 的基本类型。我们已经使用了 DataFrames，**
 
 **使用 Dataset API时，该域为它遇到的每一行指定类型，Spark将Spark Row格式转换为您指定的对象（案例类或Java类）。这种转换会减慢您的操作速度，但可以提供更大的灵活性。您会注意到性能受到了影响，**但这与您在Python中的用户定义函数（UDF）之类的看到的结果数量级相差很大，因为性能成本并不像切换编程语言那样极端，但是是一件重要的事情要牢记。
 
-您可能会思考，如果我在使用 Dataset 时要付出性能损失，那为什么还要使用它们呢？如果我们必须将其简化为规范列表，则有以下两个原因：
+**您可能会思考，如果我在使用 Dataset 时要付出性能损失，那为什么还要使用它们呢？如果我们必须将其简化为规范列表，则有以下两个原因：**
 
-- 当您要执行的操作无法使用DataFrame操作表示时。
-- 您想要或需要类型安全性时，您愿意接受性能成本来实现它。
+- **当您要执行的操作无法使用DataFrame操作表示时。**
+- **您想要或需要类型安全性时，您愿意接受性能成本来实现它。**
 
 ## Chapter19_Performance-Tuning
 
 >有许多不同的方法来优化Spark应用程序的性能，使其以更低的成本更快地运行。一般来说，您要优先考虑的主要事情是
 >
->（1）通过分区和有效的二进制格式读取尽可能少的数据
+>（1）**通过分区和有效的二进制格式读取尽可能少的数据**
 >
->（2）确保在使用分区的集群上有足够的并行性和没有数据倾斜
+>（2）**确保在使用分区的集群上有足够的并行性和没有数据倾斜**
 >
->（3）尽可能多地使用 high-level APIs去采用已经优化过的代码，例如：结构化的API
+>（3）尽可能多地使用 high-level APIs去采用已经优化过的代码，例如：**结构化的API**
 >
 >与任何其他软件优化工作一样，您还应该确保为您的工作优化了正确的操作：第18章中描述的 Spark 监控工具将让您了解哪些阶段花费的时间最长，并将您的精力集中在这些阶段上。一旦确定了您认为可以优化的工作，本章中的工具将为大多数用户提供最重要的性能优化机会。
 
